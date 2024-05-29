@@ -1,0 +1,36 @@
+# Created by .ignore support plugin (hsz.mobi)
+### Example user template template
+### Example user template
+./out
+
+output
+
+.vscode
+.vscode/***
+
+out
+gen### JetBrains template
+# Covers JetBrains IDEs: IntelliJ, RubyMine, PhpStorm, AppCode, PyCharm, CLion, Android Studio and WebStorm
+# Reference: https://intellij-support.jetbrains.com/hc/en-us/articles/206544839
+
+/profile
+.akku/**
+*.akku
+*.sig
+
+*.so
+*.boot
+run
+output-type-analysis
+*.chez
+*.generated.c
+*.wpo
+
+# IntelliJ
+out/
+
+
+# Log file
+*.log
+
+
