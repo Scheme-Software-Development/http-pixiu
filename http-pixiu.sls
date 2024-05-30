@@ -5,7 +5,6 @@
 
 (library (http-pixiu)
   (export hello)
-  (import (rnrs))
+  (import (chescheme))
 
-(define (hello whom)
-  (string-append "Hello " whom "!")))
+  )
