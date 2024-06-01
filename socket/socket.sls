@@ -48,7 +48,7 @@
 (define unlink
   (foreign-procedure "unlink" (string) int))
 
-;;; routines defined in csocket.c
+;;; routines defined in socket.c
 (define accept
   (foreign-procedure "do_accept" (int) int))
 
