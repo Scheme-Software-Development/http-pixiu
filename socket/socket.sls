@@ -1,4 +1,4 @@
-(library (http-pixiu socket)
+(library (http-pixiu socket socket)
   (export 
     close
     dup

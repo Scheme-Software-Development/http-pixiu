@@ -1,3 +1,1 @@
-cd socket
-gcc -s socket.c -o socket.so
-cd .．
+gcc -nostartfiles -s socket/socket.c -o socket/socket.so
