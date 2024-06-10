@@ -8,11 +8,11 @@
     (srfi :64 testing) 
     (http-pixiu socket socket) )
 
-(test-begin "socket session")
-(define client-pid)
-(define client-socket)
-(let* ([server-docket-name (tmpnam 0)])
-  [server-socket (setup-server-socket server-socket-name)]
+(test-begin "socket test")
+(let* ([server-socket-name (tmpnam 0)])
+    [server-socket (setup-server-socket server-socket-name)])
+  (dofork 
+    (lambda ()))
 )
 (test-end)
 

@@ -46,9 +46,9 @@ int bytes_ready(int fd) {
 }
 
 /* socket support */
-/* do_socket() creates a new AF_UNIX socket */
+/* do_socket() creates a new AF_INET socket */
 int do_socket(void) {
-    return socket(AF_UNIX, SOCK_STREAM, 0);
+    return socket(AF_INET , SOCK_STREAM, 0);
 }
 
 /* do_bind(s, name) binds name to the socket s */
