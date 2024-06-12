@@ -2,8 +2,8 @@
 (import (akku format manifest))
 
 (akku-package ("http-pixiu" "1.0.0-alpha.0")
-  (synopsis "I did not edit Akku.manifest")
-  (authors "Guy Q. Schemer")
+  (synopsis "A http server based on scheme")
+  (authors "Wang Zheng")
   (license "MIT")
   (depends ("compression" "^0.1.2")
            ("ufo-threaded-function" "^1.0.4")
