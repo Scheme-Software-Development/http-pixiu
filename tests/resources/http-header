@@ -1,0 +1,11 @@
+GET /s?wd=http%20header HTTP/1.1
+Host: www.baidu.com
+User-Agent: Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:88.0) Gecko/20100101 Firefox/88.0
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8
+Accept-Language: zh-CN,en-US;q=0.7,en;q=0.3
+Accept-Encoding: gzip, deflate, br
+Connection: keep-alive
+Cookie: BAIDUID=74D44696BF099EE05B431879B6A0A88D:SL=0:NR=10:FG=1; BIDUPSID=DE6F2D996872840588011BF8C06D2C46; PSTM=1590159587; H_WISE_SIDS=60326_60335; MSA_WH=1670_1066; H_PS_PSSID=60326_60335; MCITY=-174%3A; BDUSS=i1OQ3RTUm5PZUxVcGxQRG84NWFGY3JPaHdGOFBwbVNqakJtWU9MNFVhR1d6MVZtRVFBQUFBJCQAAAAAAAAAAAEAAAD9UscEdWZvd3poAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJZCLmaWQi5md; BD_UPN=133352; BDORZ=B490B5EBF6F3CD402E515D22BCDA1598; RT="z=1&dm=baidu.com&si=6b476cd7-f916-4e13-a462-84c615b9e709&ss=lxbghisk&sl=0&tt=0&bcn=https%3A%2F%2Ffclog.baidu.com%2Flog%2Fweirwood%3Ftype%3Dperf&ld=7cx&ul=aj0tr&hd=aj0yv"; delPer=0; BD_CK_SAM=1; PSINO=1; BA_HECTOR=0k8g0g2125ak85a50h248ka5bjbdno1j6il801v; ZFY=wL:BN0Bt9zGthQb8uXZnRQAwZuWBjDI0k5SoIi9QCeWU:C; H_PS_645EC=3490QLYlEtfWmSSJNKKf9ZdPwZSD%2Buv5XKS4rgaKXKwOomgNW1xBy48FO3o; sug=3; sugstore=0; ORIGIN=0; bdime=0; BDSVRTM=0
+Upgrade-Insecure-Requests: 1
+Pragma: no-cache
+Cache-Control: no-cache
