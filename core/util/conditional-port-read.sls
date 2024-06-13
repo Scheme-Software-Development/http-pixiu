@@ -1,0 +1,60 @@
+(library (http-pixiu core util conditional-port-read)
+  (export 
+      ignore-case-char=?
+
+      step-forward-with)
+  (import (rnrs))
+
+
+(define (ignore-case-char=? a b)
+  (equal? (char-downcase a) (char-downcase b)))
+
+(define (step-forward-to port char-list predicator)
+  (let ([back-to-position (port-position port)])
+    (cond 
+      [(null? char-list) #t]
+      [(eof-object? current-char) 
+        (set-port-position! port back-to-position)
+        #f]
+      [(predicator current-char (car char-list)) 
+        (if (step-forward-with to (cdr char-list) predicator)
+          #t
+          (begin 
+            (set-port-position! port back-to-position)
+            #f))]
+      [else (step-forward-to port char-list predicator)])))
+
+(define (step-forward-with port char-list predicator)
+  (let ([back-to-position (port-position port)]
+      [current-char (read-char port)])
+    (cond 
+      [(null? char-list) #t]
+      [(eof-object? current-char) 
+        (set-port-position! port back-to-position)
+        #f]
+      [(predicator current-char (car char-list)) 
+        (if (step-forward-with port (cdr char-list) predicator)
+          #t
+          (begin 
+            (set-port-position! port back-to-position)
+            #f))]
+      [else 
+        (set-port-position! port back-to-position)
+        #f])))
+
+(define (chain->lamdba . conditions-list)
+  (lambda (port)
+    (call/cc1 
+      (lambda (return)
+        (let ([back-to-position (port-position port)])
+          (return 
+            (fold-left 
+              (lambda (l r)
+                (if l
+                  (r port)
+                  (begin 
+                    (set-port-postion! port back-to-postion)
+                    (return #f))))
+              #t
+              conditions-list)))))))
+)

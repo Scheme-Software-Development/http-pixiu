@@ -2,8 +2,7 @@
   ; (export hello)
   (import 
     (chescheme)
-    (ufo-socket)
-    )
+    (ufo-socket))
 
 (define-record-type server
   (fields 
