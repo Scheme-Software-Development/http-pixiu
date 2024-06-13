@@ -3,7 +3,7 @@
       ignore-case-char=?
       step-forward-to
       step-forward-with)
-  (import (rnrs))
+  (import (chezscheme))
 
 (define (ignore-case-char=? a b)
   (equal? (char-downcase a) (char-downcase b)))
@@ -25,6 +25,7 @@
         [else #f]))))
 
 (define (step-forward-with port char-list predicator)
+    (pretty-print 'aa)
   (let ([back-to-position (port-position port)]
       [current-char (read-char port)])
     (cond 
@@ -44,7 +45,7 @@
 
 (define (chain->lamdba . conditions-list)
   (lambda (port)
-    (call/cc1 
+    (call/1cc
       (lambda (return)
         (let ([back-to-position (port-position port)])
           (return 
@@ -53,7 +54,7 @@
                 (if l
                   (r port)
                   (begin 
-                    (set-port-postion! port back-to-postion)
+                    (set-port-position! port back-to-position)
                     (return #f))))
               #t
               conditions-list)))))))
