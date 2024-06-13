@@ -1,28 +1,28 @@
 (library (http-pixiu core util conditional-port-read)
   (export 
       ignore-case-char=?
-
+      step-forward-to
       step-forward-with)
   (import (rnrs))
-
 
 (define (ignore-case-char=? a b)
   (equal? (char-downcase a) (char-downcase b)))
 
-(define (step-forward-to port char-list predicator)
+(define (step-forward-to port char-list predicator max-step)
   (let ([back-to-position (port-position port)])
-    (cond 
-      [(null? char-list) #t]
-      [(eof-object? current-char) 
-        (set-port-position! port back-to-position)
-        #f]
-      [(predicator current-char (car char-list)) 
-        (if (step-forward-with to (cdr char-list) predicator)
-          #t
-          (begin 
-            (set-port-position! port back-to-position)
-            #f))]
-      [else (step-forward-to port char-list predicator)])))
+    (let loop ([current-position back-to-position]
+        [current-char-list char-list]
+        [current-char (read-char port)])
+      (cond 
+        [(null? char-list) #t]
+        [(eof-object? current-char) 
+          (set-port-position! port back-to-position)
+          #f]
+        [(predicator current-char (car char-list)) 
+          (loop (+ 1 current-position) (cdr char-list) (read-char port))]
+        [(<= (- current-position back-to-position) max-step)
+          (loop (+ 1 current-position) char-list (read-char port))]
+        [else #f]))))
 
 (define (step-forward-with port char-list predicator)
   (let ([back-to-position (port-position port)]
