@@ -4,16 +4,16 @@
 ;; SPDX-License-Identifier: MIT
 #!r6rs
 
-(import (rnrs (6)) (srfi :64 testing) (http-pixiu core util conditional-port-read))
+(import (chezscheme) (srfi :64 testing) (http-pixiu core util conditional-port-read))
 
 (test-begin "step-forward-with")
 (with-input-from-file "./tests/resources/http-header"
-  (lambda (port)
-    (display 'aaa)
-    ; (test-equal #t 
-      (step-forwart-with port (string->list "\n") char=?)
-      ; )
-      ))
+  (lambda () (test-equal #t (step-forward-with (current-input-port) (string->list "GET") char=?))))
+(test-end)
+
+(test-begin "ignore-case-char=?")
+(with-input-from-file "./tests/resources/http-header"
+  (lambda () (test-equal #t (step-forward-with (current-input-port) (string->list "get") ignore-case-char=?))))
 (test-end)
 
 (exit (if (zero? (test-runner-fail-count (test-runner-get))) 0 1))

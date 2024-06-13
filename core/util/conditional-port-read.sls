@@ -25,7 +25,6 @@
         [else #f]))))
 
 (define (step-forward-with port char-list predicator)
-    (pretty-print 'aa)
   (let ([back-to-position (port-position port)]
       [current-char (read-char port)])
     (cond 
