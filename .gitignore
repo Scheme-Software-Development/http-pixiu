@@ -15,10 +15,12 @@ gen### JetBrains template
 
 /profile
 .akku/**
+/socket
 *.akku
 *.sig
 
 *.so
+*.o
 *.boot
 run
 output-type-analysis

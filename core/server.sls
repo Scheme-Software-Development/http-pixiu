@@ -1,7 +1,12 @@
 (library (http-pixiu core server)
-  ; (export hello)
+  (export 
+    make-server
+    server?
+
+    server-socket
+    server-thread-pool)
   (import 
-    (chescheme)
+    (chezscheme)
     (ufo-socket))
 
 (define-record-type server
@@ -13,7 +18,7 @@
     (lambda (new)
       (lambda (port log-port thread-pool )
         (new 
-          (make-server-socket port)
+          (make-server-socket (number->string port))
           log-port 
           thread-pool)))))
 
