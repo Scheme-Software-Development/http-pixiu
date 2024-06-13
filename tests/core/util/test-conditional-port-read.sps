@@ -6,6 +6,11 @@
 
 (import (chezscheme) (srfi :64 testing) (http-pixiu core util conditional-port-read))
 
+(test-begin "step-forward-to")
+(with-input-from-file "./tests/resources/http-header"
+  (lambda () (test-equal #t (step-forward-to (current-input-port) (string->list "\n") char=? 50))))
+(test-end)
+
 (test-begin "step-forward-with")
 (with-input-from-file "./tests/resources/http-header"
   (lambda () (test-equal #t (step-forward-with (current-input-port) (string->list "GET") char=?))))

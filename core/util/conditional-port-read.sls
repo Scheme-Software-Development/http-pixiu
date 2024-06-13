@@ -14,15 +14,17 @@
         [current-char-list char-list]
         [current-char (read-char port)])
       (cond 
-        [(null? char-list) #t]
+        [(null? current-char-list) #t]
         [(eof-object? current-char) 
           (set-port-position! port back-to-position)
           #f]
-        [(predicator current-char (car char-list)) 
-          (loop (+ 1 current-position) (cdr char-list) (read-char port))]
-        [(<= (- current-position back-to-position) max-step)
+        [(predicator current-char (car current-char-list)) 
+          (loop (+ 1 current-position) (cdr current-char-list) (read-char port))]
+        [(< (- current-position back-to-position) max-step)
           (loop (+ 1 current-position) char-list (read-char port))]
-        [else #f]))))
+        [else 
+          (set-port-position! port back-to-position)
+           #f]))))
 
 (define (step-forward-with port char-list predicator)
   (let ([back-to-position (port-position port)]
