@@ -9,41 +9,42 @@
 (define (ignore-case-char=? a b)
   (equal? (char-downcase a) (char-downcase b)))
 
-(define (step-forward-to port char-list predicator max-step)
-  (let ([back-to-position (port-position port)])
+(define (step-forward-to output-port input-port char-list predicator max-step)
+  (let ([back-to-position (port-position input-port)])
     (let loop ([current-position back-to-position]
         [current-char-list char-list]
-        [current-char (read-char port)])
+        [current-char (peek-char input-port)])
       (cond 
         [(null? current-char-list) #t]
         [(eof-object? current-char) #f]
         [(predicator current-char (car current-char-list)) 
-          (loop (+ 1 current-position) (cdr current-char-list) (read-char port))]
+          (write-char (read-char input-port) output-port)
+          (loop (+ 1 current-position) (cdr current-char-list) (read-char input-port))]
         [(< (- current-position back-to-position) max-step)
-          (loop (+ 1 current-position) char-list (read-char port))]
+          (write-char (read-char input-port) output-port)
+          (loop (+ 1 current-position) char-list (peek-char input-port))]
         [else #f]))))
 
-(define (step-forward-with port char-list predicator)
-  (let ([back-to-position (port-position port)]
-      [current-char (read-char port)])
+(define (step-forward-with output-port input-port char-list predicator)
+  (let ([current-char (peek-char input-port)])
     (cond 
       [(null? char-list) #t]
       [(eof-object? current-char) #f]
       [(predicator current-char (car char-list)) 
-        (step-forward-with port (cdr char-list) predicator)]
+        (write-char (read-char input-port) output-port)
+        (step-forward-with output-port input-port (cdr char-list) predicator)]
       [else #f])))
 
 (define (chain->lambda . conditions-list)
-  (lambda (port)
+  (lambda (input-port)
     (call/1cc
       (lambda (return)
-        (let ([back-to-position (port-position port)])
-          (return 
-            (fold-left 
-              (lambda (l r)
-                (if l
-                  (r port)
-                  (return #f)))
-              #t
-              conditions-list)))))))
+        (return 
+          (fold-left 
+            (lambda (l r)
+              (if l
+                (r input-port)
+                (return #f)))
+            #t
+            conditions-list))))))
 )
