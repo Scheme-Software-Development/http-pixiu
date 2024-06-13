@@ -2,7 +2,8 @@
   (export 
       ignore-case-char=?
       step-forward-to
-      step-forward-with)
+      step-forward-with
+      chain->lambda)
   (import (chezscheme))
 
 (define (ignore-case-char=? a b)
@@ -44,7 +45,7 @@
         (set-port-position! port back-to-position)
         #f])))
 
-(define (chain->lamdba . conditions-list)
+(define (chain->lambda . conditions-list)
   (lambda (port)
     (call/1cc
       (lambda (return)
