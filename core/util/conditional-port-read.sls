@@ -16,34 +16,22 @@
         [current-char (read-char port)])
       (cond 
         [(null? current-char-list) #t]
-        [(eof-object? current-char) 
-          (set-port-position! port back-to-position)
-          #f]
+        [(eof-object? current-char) #f]
         [(predicator current-char (car current-char-list)) 
           (loop (+ 1 current-position) (cdr current-char-list) (read-char port))]
         [(< (- current-position back-to-position) max-step)
           (loop (+ 1 current-position) char-list (read-char port))]
-        [else 
-          (set-port-position! port back-to-position)
-           #f]))))
+        [else #f]))))
 
 (define (step-forward-with port char-list predicator)
   (let ([back-to-position (port-position port)]
       [current-char (read-char port)])
     (cond 
       [(null? char-list) #t]
-      [(eof-object? current-char) 
-        (set-port-position! port back-to-position)
-        #f]
+      [(eof-object? current-char) #f]
       [(predicator current-char (car char-list)) 
-        (if (step-forward-with port (cdr char-list) predicator)
-          #t
-          (begin 
-            (set-port-position! port back-to-position)
-            #f))]
-      [else 
-        (set-port-position! port back-to-position)
-        #f])))
+        (step-forward-with port (cdr char-list) predicator)]
+      [else #f])))
 
 (define (chain->lambda . conditions-list)
   (lambda (port)
@@ -55,9 +43,7 @@
               (lambda (l r)
                 (if l
                   (r port)
-                  (begin 
-                    (set-port-position! port back-to-position)
-                    (return #f))))
+                  (return #f)))
               #t
               conditions-list)))))))
 )

@@ -21,4 +21,18 @@
   (lambda () (test-equal #t (step-forward-with (current-input-port) (string->list "get") ignore-case-char=?))))
 (test-end)
 
+(test-begin "condition->lambda")
+(let ([condition-chain 
+      (chain->lambda
+        (lambda (port) (step-forward-with port (string->list "get") ignore-case-char=?))
+        (lambda (port) (step-forward-to port (string->list "\n") char=? 50))) ])
+  (with-input-from-file "./tests/resources/http-header"
+    (lambda () (test-equal #t (condition-chain (current-input-port))))))
+(test-end)
+
+(test-begin "step-forward-with")
+(with-input-from-file "./tests/resources/http-header"
+  (lambda () (test-equal #f (step-forward-with (current-input-port) (string->list "POST") char=?))))
+(test-end)
+
 (exit (if (zero? (test-runner-fail-count (test-runner-get))) 0 1))
