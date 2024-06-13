@@ -1,6 +1,6 @@
 #!/usr/bin/env scheme-script
 ;; -*- mode: scheme; coding: utf-8 -*- !#
-;; Copyright (c) 2024 Guy Q. Schemer
+;; Copyright (c) 2024 WANG Zheng
 ;; SPDX-License-Identifier: MIT
 #!r6rs
 
