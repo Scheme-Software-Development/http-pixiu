@@ -8,7 +8,7 @@
 
 (test-begin "step-forward-to")
 (test-equal 
-  "GET /s?wd=http%20header HTTP/1.1\n"
+  "GET /politics/2024_06_14_737908.shtml HTTP/1.1\n"
   (with-output-to-string 
     (lambda () 
       (with-input-from-file "./tests/resources/http-header"
@@ -35,7 +35,7 @@
 
 (test-begin "condition->lambda")
 (test-equal 
-  "GET /s?wd=http%20header HTTP/1.1\n"
+  "GET /politics/2024_06_14_737908.shtml HTTP/1.1\n"
   (with-output-to-string 
     (lambda () 
       (let* ([output-port (current-output-port)]
