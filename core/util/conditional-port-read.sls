@@ -28,7 +28,7 @@
         [(eof-object? current-char) #f]
         [(predicator current-char (car current-char-list)) 
           (write-char (read-char input-port) output-port)
-          (loop (+ 1 current-position) (cdr current-char-list) (read-char input-port))]
+          (loop (+ 1 current-position) (cdr current-char-list) (peek-char input-port))]
         [(< (- current-position back-to-position) max-step)
           (write-char (read-char input-port) output-port)
           (loop (+ 1 current-position) char-list (peek-char input-port))]

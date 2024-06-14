@@ -5,14 +5,15 @@
     (ufo-coroutines)
     (http-pixiu core protocol status)
     (http-pixiu core util conditional-port-read)
-    (http-pixiu core util association))
+    (http-pixiu core util association)
+    (only (srfi :13) string-trim-right))
 
 ;4kiB
 (define request-header-size (* 4 1024 1024))
 
 (define parse-request-coroutine 
   (case-lambda 
-    [(input-port) (parse-request-coroutine request-header-size)]
+    [(input-port) (parse-request-coroutine input-port request-header-size)]
     [(input-port current-header-size)
       (let ([origin-position (port-position input-port)])
         (init-coroutine
@@ -20,9 +21,9 @@
             (let loop ([env '()]
                 [l 
                   (list
-                    (lambda (env) `(method . ,(read-to-space input-port (- current-header-size (- (port-position input-port) origin-position)))))
-                    (lambda (env) `(uri . ,(read-to-space input-port (- current-header-size (- (port-position input-port) origin-position)))))
-                    (lambda (env) `(protocol . ,(read-to-nextline input-port (- current-header-size (- (port-position input-port) origin-position))))))])
+                    (lambda () `(method . ,(string-trim-right (read-to-space input-port (- current-header-size (- (port-position input-port) origin-position))))))
+                    (lambda () `(uri . ,(string-trim-right (read-to-space input-port (- current-header-size (- (port-position input-port) origin-position))))))
+                    (lambda () `(protocol . ,(string-trim-right (read-to-nextline input-port (- current-header-size (- (port-position input-port) origin-position)))))))])
               (cond 
                 [(> (- (port-position input-port) origin-position current-header-size) 0)
                   (raise status:bad-request)]
@@ -32,15 +33,15 @@
                       (if l
                         `(,@env (body . ,(read-with-length input-port l))
                         (raise status:bad-request)))
-                      (loop `(,@env ,(yield (read-kv input-port (- (port-position input-port) origin-position current-header-size)))) l)))]
-                [else (loop `(,@env ,(yield ((car l) env))) (cdr l))])))))]))
+                      (loop (yield `(,@env ,(read-kv input-port (- (port-position input-port) origin-position current-header-size)))) l)))]
+                [else (loop (yield `(,@env ,((car l)))) (cdr l))])))))]))
 
 (define (read-kv input-port length)
   (let* ([origin-position (port-position input-port)]
       [k (string-downcase (read-to-space input-port length))]
       [current-position (port-position input-port)]
       [v (read-to-nextline input-port (- length (- current-position origin-position)))])
-    `(,k . ,v)))
+    `(,k . ,(string-trim-right v))))
 
 (define (read-with-length input-port length)
   (with-output-to-string 
@@ -51,8 +52,9 @@
 (define (read-with input-port target-string length)
   (with-output-to-string 
     (lambda ()
-      (if (not (step-forward-with (current-output-port) input-port (string->list target-string) char=? length))
-        (raise status:bad-request)))))
+      (cond 
+        [(> (string-length target-string) length) (raise status:bad-request)]
+        [(not (step-forward-with (current-output-port) input-port (string->list target-string) char=? length)) (raise status:bad-request)]))))
 
 (define (read-to-space input-port length)
   (with-output-to-string 
