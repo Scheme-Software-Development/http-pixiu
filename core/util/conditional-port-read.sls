@@ -3,11 +3,20 @@
       ignore-case-char=?
       step-forward-to
       step-forward-with
+      step-forward-with-length
       chain->lambda)
   (import (chezscheme))
 
 (define (ignore-case-char=? a b)
   (equal? (char-downcase a) (char-downcase b)))
+
+(define (step-forward-with-length output-port input-port length)
+  (let ([current-char (read-char input-port)])
+    (write-char current-char output-port)
+    (cond 
+      [(eof-object? current-char) #f]
+      [(zero? length) #t]
+      [else (step-forward-with-length output-port input-port (- length 1))])))
 
 (define (step-forward-to output-port input-port char-list predicator max-step)
   (let ([back-to-position (port-position input-port)])
