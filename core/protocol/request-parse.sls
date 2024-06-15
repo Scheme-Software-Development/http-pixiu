@@ -1,6 +1,7 @@
 (library (http-pixiu core protocol request-parse)
   (export 
     parse-request-coroutine
+    get-values-from-coroutine 
 
     request-header-size
     request-body-size)
@@ -16,6 +17,14 @@
 (define request-header-size (* 4 1024 1024))
 ;2miB
 (define request-body-size (* 2 1024 1024 1024))
+
+(define (get-values-from-coroutine closure key)
+  (let-values ([(resume val) (closure)])
+    (if resume 
+      (if (assoc-ref val key)
+        (values (lambda () (resume val)) (assoc-ref val key))
+        (get-values-from-coroutine (lambda () (resume val)) key))
+      (values (lambda () (values resume val)) (assoc-ref val key)))))
 
 (define parse-request-coroutine 
   (case-lambda 
@@ -38,7 +47,7 @@
                     [(eof-object? (peek-char input-port)) env]
                     [(char=? (peek-char input-port) #\newline)
                       (let ([new-env `(,@env (should-has-body? . #t))]
-                          [content-length (assq-ref env "content-length:")])
+                          [content-length (assoc-ref env "content-length:")])
                         (cond 
                           [(not content-length) (raise status:bad-request)]
                           [(> content-length current-body-size) (raise status:bad-request)]
