@@ -37,7 +37,7 @@
                   (cond 
                     [(eof-object? (peek-char input-port)) env]
                     [(char=? (peek-char input-port) #\newline)
-                      (let ([new-env `(,@env (has-body? . #t))]
+                      (let ([new-env `(,@env (should-has-body? . #t))]
                           [content-length (assq-ref env "content-length:")])
                         (cond 
                           [(not content-length) (raise status:bad-request)]
