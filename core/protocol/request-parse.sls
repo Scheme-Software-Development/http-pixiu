@@ -10,6 +10,8 @@
 
 ;4kiB
 (define request-header-size (* 4 1024 1024))
+;2miB
+(define request-body-size (* 2 1024 1024 1024))
 
 (define parse-request-coroutine 
   (case-lambda 
@@ -32,9 +34,10 @@
                     [(eof-object? (peek-char input-port)) env]
                     [(char=? (peek-char input-port) #\newline)
                       (let ([content-length (assq-ref env "content-length:")])
-                        (if content-length
-                          `(,@env (body . ,(read-with-length input-port content-length)))
-                          (raise status:bad-request)))]
+                        (cond 
+                          [(not content-length) (raise status:bad-request)]
+                          [(> content-length request-body-size) (raise status:bad-request)]
+                          [else `(,@env (body . ,(read-with-length input-port content-length)))]))]
                     [else (loop (yield `(,@env ,(read-kv input-port (- current-header-size (- (port-position input-port) origin-position))))) l)])]
                 [else (loop (yield `(,@env ,((car l)))) (cdr l))])))))]))
 
