@@ -37,11 +37,12 @@
                   (cond 
                     [(eof-object? (peek-char input-port)) env]
                     [(char=? (peek-char input-port) #\newline)
-                      (let ([content-length (assq-ref env "content-length:")])
+                      (let ([new-env `(,@env (has-body? . #t))]
+                          [content-length (assq-ref env "content-length:")])
                         (cond 
                           [(not content-length) (raise status:bad-request)]
                           [(> content-length current-body-size) (raise status:bad-request)]
-                          [else `(,@env (body . ,(read-with-length input-port content-length)))]))]
+                          [else `(,@new-env (body . ,(read-with-length input-port content-length)))]))]
                     [else (loop (yield `(,@env ,(read-kv input-port (- current-header-size (- (port-position input-port) origin-position))))) l)])]
                 [else (loop (yield `(,@env ,((car l)))) (cdr l))])))))]))
 
