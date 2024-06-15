@@ -1,5 +1,9 @@
 (library (http-pixiu core protocol request-parse)
-  (export parse-request-coroutine)
+  (export 
+    parse-request-coroutine
+
+    request-header-size
+    request-body-size)
   (import 
     (chezscheme)
     (ufo-coroutines)
