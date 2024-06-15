@@ -10,7 +10,7 @@
   (http-pixiu core protocol request-parse)
   (http-pixiu core util association))
 
-(test-begin "test parse coroutine:get method")
+(test-begin "get from coroutine")
 (with-input-from-file "./tests/resources/http-header"
   (lambda () 
     (let ([coroutine (parse-request-coroutine (current-input-port))])
@@ -18,7 +18,7 @@
         (test-equal val "keep-alive")))))
 (test-end)
 
-(test-begin "test parse coroutine:get method")
+(test-begin "parse coroutine:get method")
 (with-input-from-file "./tests/resources/http-header"
   (lambda () 
     (let ([coroutine (parse-request-coroutine (current-input-port))])
@@ -26,7 +26,7 @@
         (test-equal (assq-ref val 'method) "GET")))))
 (test-end)
 
-(test-begin "test parse coroutine")
+(test-begin "parse coroutine")
 (with-input-from-file "./tests/resources/http-header"
   (lambda () 
     (let loop ([coroutine (parse-request-coroutine (current-input-port))]
