@@ -15,8 +15,8 @@
 
 (define parse-request-coroutine 
   (case-lambda 
-    [(input-port) (parse-request-coroutine input-port request-header-size)]
-    [(input-port current-header-size)
+    [(input-port) (parse-request-coroutine input-port request-header-size request-body-size)]
+    [(input-port current-header-size current-body-size)
       (let ([origin-position (port-position input-port)])
         (init-coroutine
           (lambda (yield)
@@ -36,7 +36,7 @@
                       (let ([content-length (assq-ref env "content-length:")])
                         (cond 
                           [(not content-length) (raise status:bad-request)]
-                          [(> content-length request-body-size) (raise status:bad-request)]
+                          [(> content-length current-body-size) (raise status:bad-request)]
                           [else `(,@env (body . ,(read-with-length input-port content-length)))]))]
                     [else (loop (yield `(,@env ,(read-kv input-port (- current-header-size (- (port-position input-port) origin-position))))) l)])]
                 [else (loop (yield `(,@env ,((car l)))) (cdr l))])))))]))
