@@ -13,7 +13,7 @@
 (test-begin "get from coroutine")
 (with-input-from-file "./tests/resources/http-header"
   (lambda () 
-    (let ([coroutine (parse-request-coroutine (current-input-port))])
+    (let ([coroutine (parse-request-coroutine (current-input-port) '())])
       (let-values ([(closure val) (get-values-from-coroutine coroutine "connection:")] )
         (test-equal val "keep-alive")))))
 (test-end)
@@ -21,7 +21,7 @@
 (test-begin "parse coroutine:get method")
 (with-input-from-file "./tests/resources/http-header"
   (lambda () 
-    (let ([coroutine (parse-request-coroutine (current-input-port))])
+    (let ([coroutine (parse-request-coroutine (current-input-port) '())])
       (let-values ([(resume val) (coroutine)])
         (test-equal (assq-ref val 'method) "GET")))))
 (test-end)
@@ -29,7 +29,7 @@
 (test-begin "parse coroutine")
 (with-input-from-file "./tests/resources/http-header"
   (lambda () 
-    (let loop ([coroutine (parse-request-coroutine (current-input-port))]
+    (let loop ([coroutine (parse-request-coroutine (current-input-port) '())]
           [target-val '()])
       (let-values ([(resume val) (apply coroutine target-val)])
         (if resume 

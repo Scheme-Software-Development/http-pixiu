@@ -28,70 +28,64 @@
 
 (define parse-request-coroutine 
   (case-lambda 
-    [(input-port) (parse-request-coroutine input-port request-header-size request-body-size)]
-    [(input-port current-header-size current-body-size)
-      (let ([origin-position (port-position input-port)])
+    [(input-textual-port input-binary-port) (parse-request-coroutine input-textual-port input-binary-port request-header-size request-body-size)]
+    [(input-textual-port input-binary-port current-header-size current-body-size)
+      (let ([origin-position (port-position input-textual-port)])
         (init-coroutine
           (lambda (yield)
             (let loop ([env '()]
                 [l 
                   (list
-                    (lambda () `(method . ,(string-trim-right (read-to-space input-port (- current-header-size (- (port-position input-port) origin-position))))))
-                    (lambda () `(uri . ,(string-trim-right (read-to-space input-port (- current-header-size (- (port-position input-port) origin-position))))))
-                    (lambda () `(protocol . ,(string-trim-right (read-to-nextline input-port (- current-header-size (- (port-position input-port) origin-position)))))))])
+                    (lambda () `(method . ,(string-trim-right (read-to-space input-textual-port (- current-header-size (- (port-position input-textual-port) origin-position))))))
+                    (lambda () `(uri . ,(string-trim-right (read-to-space input-textual-port (- current-header-size (- (port-position input-textual-port) origin-position))))))
+                    (lambda () `(protocol . ,(string-trim-right (read-to-nextline input-textual-port (- current-header-size (- (port-position input-textual-port) origin-position)))))))])
               (cond 
-                [(> (- (port-position input-port) origin-position current-header-size) 0)
+                [(> (- (port-position input-textual-port) origin-position current-header-size) 0)
                   (raise status:bad-request)]
                 [(null? l) 
                   (cond 
-                    [(eof-object? (peek-char input-port)) env]
-                    [(char=? (peek-char input-port) #\newline)
+                    [(eof-object? (peek-char input-textual-port)) env]
+                    [(char=? (peek-char input-textual-port) #\newline)
                       (let ([new-env `(,@env (should-has-body? . #t))]
-                          [content-length (assoc-ref env "content-length:")])
+                          [content-length (find (lambda (pair) (equal? "content-length:" (string-downcase (car pair)))) env)])
                         (cond 
                           [(not content-length) (raise status:bad-request)]
                           [(> content-length current-body-size) (raise status:bad-request)]
-                          [else `(,@new-env (body . ,(read-with-length input-port content-length)))]))]
-                    [else (loop (yield `(,@env ,(read-kv input-port (- current-header-size (- (port-position input-port) origin-position))))) l)])]
+                          [else `(,@new-env (body . ,(get-bytevector-n input-binary-port content-length)))]))]
+                    [else (loop (yield `(,@env ,(read-kv input-textual-port (- current-header-size (- (port-position input-textual-port) origin-position))))) l)])]
                 [else (loop (yield `(,@env ,((car l)))) (cdr l))])))))]))
 
-(define (read-kv input-port length)
-  (let* ([origin-position (port-position input-port)]
-      [k (string-downcase (read-to-space input-port length))]
-      [current-position (port-position input-port)]
-      [v (read-to-nextline/eof input-port (- length (- current-position origin-position)))])
+(define (read-kv input-textual-port length)
+  (let* ([origin-position (port-position input-textual-port)]
+      [k (string-downcase (read-to-space input-textual-port length))]
+      [current-position (port-position input-textual-port)]
+      [v (read-to-nextline/eof input-textual-port (- length (- current-position origin-position)))])
     `(,(string-trim-right k) . ,(string-trim-right v))))
 
-(define (read-with-length input-port length)
-  (with-output-to-string 
-    (lambda ()
-      (if (not (step-forward-with-length (current-output-port) input-port length))
-        (raise status:bad-request)))))
-
-(define (read-with input-port target-string length)
+(define (read-with input-textual-port target-string length)
   (with-output-to-string 
     (lambda ()
       (cond 
         [(> (string-length target-string) length) (raise status:bad-request)]
-        [(not (step-forward-with (current-output-port) input-port (string->list target-string) ignore-case-char=?)) 
+        [(not (step-forward-with (current-output-port) input-textual-port (string->list target-string) ignore-case-char=?)) 
           (raise status:bad-request)]))))
 
-(define (read-to-space input-port length)
+(define (read-to-space input-textual-port length)
   (with-output-to-string 
     (lambda ()
-      (if (not (step-forward-to (current-output-port) input-port (string->list " ") char=? length))
+      (if (not (step-forward-to (current-output-port) input-textual-port (string->list " ") char=? length))
         (raise status:bad-request)))))
 
-(define (read-to-nextline input-port length)
+(define (read-to-nextline input-textual-port length)
   (with-output-to-string 
     (lambda ()
-      (if (not (step-forward-to (current-output-port) input-port (string->list "\n") char=? length))
+      (if (not (step-forward-to (current-output-port) input-textual-port (string->list "\n") char=? length))
         (raise status:bad-request)))))
 
-(define (read-to-nextline/eof input-port length)
+(define (read-to-nextline/eof input-textual-port length)
   (with-output-to-string 
     (lambda ()
-      (if (not (step-forward-to (current-output-port) input-port (string->list "\n") char=? length))
-        (if (not (eof-object? (peek-char input-port)))
+      (if (not (step-forward-to (current-output-port) input-textual-port (string->list "\n") char=? length))
+        (if (not (eof-object? (peek-char input-textual-port)))
           (raise status:bad-request))))))
 )
