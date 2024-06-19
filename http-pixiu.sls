@@ -46,6 +46,7 @@
 (define start-server
   (case-lambda 
     [(port) (make-server port (current-output-port) 1)]
+    [(port thread-num) (make-server port (current-output-port) thread-num)]
     [(port log-port thread-num)
       (let* ([thread-pool (init-thread-pool thread-num)]
           [server (make-server port log-port thread-pool)])
