@@ -1,5 +1,5 @@
 (library (http-pixiu)
-  (export )
+  (export start-server)
   (import 
     (chezscheme)
 
@@ -11,6 +11,7 @@
     (http-pixiu core util io)
 
     (chibi uri)
+    (ufo-socket)
     (ufo-thread-pool))
 
 (define private-static-path "./static")
@@ -22,10 +23,10 @@
         ;now only static pages
         (let* ([binary-input-port (socket-input-port socket)]
             [binary-output-port (socket-output-port socket)]
-            [textual-input-port (transcoded-port binary-input-port (current-transcorder))]
+            [textual-input-port (transcoded-port binary-input-port (current-transcoder))]
             [closure (parse-request-coroutine textual-input-port binary-input-port)]
             [method (get-values-from-coroutine closure 'method)]
-            [target-string (get-values-from-coroutine closure 'uri)])
+            [target-string (get-values-from-coroutine closure 'uri)]
             [uri (string->uri target-string)]
             [path (uri-path uri)]
             [fip (open-file-input-port (string-append private-static-path path))])
@@ -34,14 +35,14 @@
             (call-with-bytevector-output-port fip
               (lambda (op)
                 (let loop ([c (get-u8 fip)])
-                  (case 
-                    [(#!eof) #t]
+                  (cond
+                    [(eof-object? c) #t]
                     [else 
                       (put-u8 op c)
                       (loop (get-u8 fip))]))))))
         (except e
-          [(number? e) (write-response (socket-output-port socket) e alist body-bytevector)]
-          [else (raise e)]))))
+          [(number? e) (write-response (socket-output-port socket) e '() '())]
+          [else (raise e)])))))
 
 (define start-server
   (case-lambda 

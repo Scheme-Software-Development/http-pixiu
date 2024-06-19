@@ -18,7 +18,7 @@
     (lambda (new)
       (lambda (port log-port thread-pool )
         (new 
-          (make-server-socket (number->string port))
+          (make-server-socket port)
           log-port 
           thread-pool)))))
 
