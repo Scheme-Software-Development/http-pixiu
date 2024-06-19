@@ -7,7 +7,7 @@
 (import (rnrs (6)) (srfi :64 testing) (http-pixiu core server))
 
 (test-begin "make-server")
-(let ([server (make-server 5000 '() '())])
+(let ([server (make-server "5000" '() '())])
     (test-equal "Hello World!" "Hello World!"))
 (test-end)
 

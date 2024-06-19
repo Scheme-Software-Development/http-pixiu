@@ -21,7 +21,6 @@
     (call-with-socket socket
       (lambda (socket)
         (try 
-          (pretty-print 'lifecycle)
           ;now only static pages
           (let* ([binary-input-port (socket-input-port socket)]
               [binary-output-port (socket-output-port socket)]
@@ -31,20 +30,26 @@
               [target-string (get-values-from-coroutine closure 'uri)]
               [uri (string->uri target-string)]
               [path (uri-path uri)]
-              [fip (open-file-input-port (string-append private-static-path path))])
-            (pretty-print path)
-            (write-response binary-output-port status:ok '()
-              (call-with-bytevector-output-port fip
-                (lambda (op)
-                  (let loop ([c (get-u8 fip)])
-                    (cond
-                      [(eof-object? c) #t]
-                      [else 
-                        (put-u8 op c)
-                        (loop (get-u8 fip))]))))))
-          (except e
-            [(number? e) (write-response (socket-output-port socket) e '() '())]
-            [else (raise e)]))))))
+              [local (string-append private-static-path path)])
+            (pretty-print local)
+            (cond 
+              [(not (file-exists? local)) (write-response binary-output-port status:not-found '() '())]
+              [else 
+                (let ([fip (open-file-input-port (string-append private-static-path local))])
+                  (write-response binary-output-port status:ok '()
+                    (call-with-bytevector-output-port 
+                      (lambda (op)
+                        (let loop ([c (get-u8 fip)])
+                          (cond
+                            [(eof-object? c) #t]
+                            [else 
+                              (put-u8 op c)
+                              (loop (get-u8 fip))]))))))]))
+          (except c
+            [(number? c) (write-response (socket-output-port socket) c '() '())]
+            [else 
+              (pretty-print `(format ,(condition-message c) ,@(condition-irritants c)))
+              (raise c)]))))))
 
 (define start-server
   (case-lambda 
