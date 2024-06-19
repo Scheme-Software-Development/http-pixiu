@@ -40,21 +40,18 @@
                     (lambda () `(method . ,(string-trim-right (read-to-space input-binary-port (- current-header-size (- (port-position input-binary-port) origin-position))))))
                     (lambda () `(uri . ,(string-trim-right (read-to-space input-binary-port (- current-header-size (- (port-position input-binary-port) origin-position))))))
                     (lambda () `(protocol . ,(string-trim-right (read-to-nextline/eof input-binary-port (- current-header-size (- (port-position input-binary-port) origin-position)))))))])
-              (try 
-                (if (null? l) 
-                  (cond 
-                    [(eof-object? (lookahead-u8 input-binary-port)) env]
-                    [(= (lookahead-u8 input-binary-port) (char->integer #\newline))
-                      (let ([new-env `(,@env (should-has-body? . #t))]
-                          [content-length (find (lambda (pair) (equal? "content-length:" (string-downcase (car pair)))) env)])
-                        (cond 
-                          [(not content-length) (raise status:bad-request)]
-                          [(> content-length current-body-size) (raise status:bad-request)]
-                          [else `(,@new-env (body . ,(get-bytevector-n input-binary-port content-length)))]))]
-                    [else (loop (yield `(,@env ,(read-kv input-binary-port (- current-header-size (- (port-position input-binary-port) origin-position))))) l)])
-                  (loop (yield `(,@env ,((car l)))) (cdr l)))
-                (except e
-                  [else (raise status:bad-request)]))))))]))
+              (if (null? l) 
+                (cond 
+                  [(eof-object? (lookahead-u8 input-binary-port)) env]
+                  [(= (lookahead-u8 input-binary-port) (char->integer #\newline))
+                    (let ([new-env `(,@env (should-has-body? . #t))]
+                        [content-length (find (lambda (pair) (equal? "content-length:" (string-downcase (car pair)))) env)])
+                      (cond 
+                        [(not content-length) (raise status:bad-request)]
+                        [(> content-length current-body-size) (raise status:bad-request)]
+                        [else `(,@new-env (body . ,(get-bytevector-n input-binary-port content-length)))]))]
+                  [else (loop (yield `(,@env ,(read-kv input-binary-port (- current-header-size (- (port-position input-binary-port) origin-position))))) l)])
+                (loop (yield `(,@env ,((car l)))) (cdr l)))))))]))
 
 (define (read-kv input-binary-port length)
   (let* ([origin-position (port-position input-binary-port)]

@@ -24,8 +24,7 @@
           ;now only static pages
           (let* ([binary-input-port (socket-input-port socket)]
               [binary-output-port (socket-output-port socket)]
-              [textual-input-port (transcoded-port binary-input-port (current-transcoder))]
-              [closure (parse-request-coroutine textual-input-port binary-input-port)]
+              [closure (parse-request-coroutine binary-input-port)]
               [method (get-values-from-coroutine closure 'method)]
               [target-string (get-values-from-coroutine closure 'uri)]
               [uri (string->uri target-string)]
