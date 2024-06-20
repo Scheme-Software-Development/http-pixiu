@@ -24,26 +24,25 @@
           ;now only static pages
           (let* ([binary-input-port (socket-input-port socket)]
               [binary-output-port (socket-output-port socket)]
-              [closure (parse-request-coroutine binary-input-port)]
-              [method (get-values-from-coroutine closure 'method)]
-              [target-string (get-values-from-coroutine closure 'uri)]
-              [uri (string->uri target-string)]
-              [path (uri-path uri)]
-              [local (string-append private-static-path path)])
-            (pretty-print local)
-            (cond 
-              [(not (file-exists? local)) (write-response binary-output-port status:not-found '() '())]
-              [else 
-                (let ([fip (open-file-input-port (string-append private-static-path local))])
-                  (write-response binary-output-port status:ok '()
-                    (call-with-bytevector-output-port 
-                      (lambda (op)
-                        (let loop ([c (get-u8 fip)])
-                          (cond
-                            [(eof-object? c) #t]
-                            [else 
-                              (put-u8 op c)
-                              (loop (get-u8 fip))]))))))]))
+              [closure (parse-request-coroutine binary-input-port)])
+            (let*-values ([(closure0 method) (get-values-from-coroutine closure 'method)]
+              [(closure1 target-string) (get-values-from-coroutine closure0 'uri)])
+              (let* ([uri (string->path-uri 'http target-string)]
+                  [path (uri-path uri)]
+                  [local (string-append private-static-path path)])
+                (cond 
+                  [(not (file-exists? local)) (write-response binary-output-port status:not-found '() '())]
+                  [else 
+                    (let ([fip (open-file-input-port local)])
+                      (write-response binary-output-port status:ok '()
+                        (call-with-bytevector-output-port 
+                          (lambda (op)
+                            (let loop ([c (get-u8 fip)])
+                              (cond
+                                [(eof-object? c) #t]
+                                [else 
+                                  (put-u8 op c)
+                                  (loop (get-u8 fip))]))))))]))))
           (except c
             [(number? c) (write-response (socket-output-port socket) c '() '())]
             [else 
@@ -60,7 +59,6 @@
         (display "Http-pixiu is working!")
         (newline)
         (let loop ([received-socket (socket-accept (server-socket server))])
-          (pretty-print 'loop)
           (thread-pool-add-job thread-pool (init-lifecycle received-socket))
           (loop (socket-accept (server-socket server)))))]))
 )
