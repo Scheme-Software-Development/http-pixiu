@@ -32,6 +32,7 @@
                   [local (string-append private-static-path path)])
                 (cond 
                   [(not (file-exists? local)) (write-response binary-output-port status:not-found '() '())]
+                  [(file-directory? local) (write-response binary-output-port status:not-found '() '())]
                   [else 
                     (let ([fip (open-file-input-port local)])
                       (write-response binary-output-port status:ok '()
@@ -45,9 +46,7 @@
                                   (loop (get-u8 fip))]))))))]))))
           (except c
             [(number? c) (write-response (socket-output-port socket) c '() '())]
-            [else 
-              (pretty-print `(format ,(condition-message c) ,@(condition-irritants c)))
-              (raise c)]))))))
+            [else (pretty-print `(format ,(condition-message c) ,@(condition-irritants c)))]))))))
 
 (define start-server
   (case-lambda 
