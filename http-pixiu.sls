@@ -26,27 +26,23 @@
               [binary-output-port (socket-output-port socket)]
               [closure (parse-request-coroutine binary-input-port)])
             (let*-values ([(closure0 method) (get-values-from-coroutine closure 'method)]
-              [(closure1 target-string) (get-values-from-coroutine closure0 'uri)])
+                [(closure1 target-string) (get-values-from-coroutine closure0 'uri)])
               (let* ([uri (string->path-uri 'http target-string)]
                   [path (uri-path uri)]
                   [local (string-append private-static-path path)])
-                (cond 
-                  [(not (file-exists? local)) (write-response binary-output-port status:not-found '() '())]
-                  [(file-directory? local) (write-response binary-output-port status:not-found '() '())]
-                  [else 
-                    (let ([fip (open-file-input-port local)])
-                      (write-response binary-output-port status:ok '()
-                        (call-with-bytevector-output-port 
-                          (lambda (op)
-                            (let loop ([c (get-u8 fip)])
-                              (cond
-                                [(eof-object? c) #t]
-                                [else 
-                                  (put-u8 op c)
-                                  (loop (get-u8 fip))]))))))]))))
+                (let ([fip (open-file-input-port local)])
+                  (write-response binary-output-port status:ok '()
+                    (call-with-bytevector-output-port 
+                      (lambda (op)
+                        (let loop ([c (get-u8 fip)])
+                          (cond
+                            [(eof-object? c) #t]
+                            [else 
+                              (put-u8 op c)
+                              (loop (get-u8 fip))])))))))))
           (except c
             [(number? c) (write-response (socket-output-port socket) c '() '())]
-            [else (pretty-print `(format ,(condition-message c) ,@(condition-irritants c)))]))))))
+            [else (write-response (socket-output-port socket) status:not-found '() '())]))))))
 
 (define start-server
   (case-lambda 
