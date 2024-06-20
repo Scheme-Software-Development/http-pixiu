@@ -31,47 +31,53 @@
   (case-lambda 
     [(input-binary-port) (parse-request-coroutine input-binary-port request-header-size request-body-size)]
     [(input-binary-port current-header-size current-body-size)
-      (let ([origin-position (port-position input-binary-port)])
-        (init-coroutine
-          (lambda (yield)
-            (let loop ([env '()]
-                [l 
-                  (list
-                    (lambda () `(method . ,(string-trim-right (read-to-space input-binary-port (- current-header-size (- (port-position input-binary-port) origin-position))))))
-                    (lambda () `(uri . ,(string-trim-right (read-to-space input-binary-port (- current-header-size (- (port-position input-binary-port) origin-position))))))
-                    (lambda () `(protocol . ,(string-trim-right (read-to-nextline/eof input-binary-port (- current-header-size (- (port-position input-binary-port) origin-position)))))))])
-              (if (null? l) 
-                (cond 
-                  [(eof-object? (lookahead-u8 input-binary-port)) env]
-                  [(= (lookahead-u8 input-binary-port) (char->integer #\newline))
-                    (let ([new-env `(,@env (should-has-body? . #t))]
-                        [content-length (find (lambda (pair) (equal? "content-length:" (string-downcase (car pair)))) env)])
-                      (cond 
-                        [(not content-length) (raise status:bad-request)]
-                        [(> content-length current-body-size) (raise status:bad-request)]
-                        [else `(,@new-env (body . ,(get-bytevector-n input-binary-port content-length)))]))]
-                  [else (loop (yield `(,@env ,(read-kv input-binary-port (- current-header-size (- (port-position input-binary-port) origin-position))))) l)])
-                (loop (yield `(,@env ,((car l)))) (cdr l)))))))]))
+      (init-coroutine
+        (lambda (yield)
+          (let loop ([env '()]
+              [l 
+                (list
+                  `(method . ,(lambda (current-remain-length) (read-to-space input-binary-port current-remain-length)))
+                  `(uri . ,(lambda (current-remain-length) (read-to-space input-binary-port current-remain-length)))
+                  `(protocol . ,(lambda (current-remain-length) (read-to-nextline/eof input-binary-port current-remain-length))))]
+              [remain-length current-header-size])
+            (if (null? l) 
+              (cond 
+                [(eof-object? (lookahead-u8 input-binary-port)) env]
+                [(= (lookahead-u8 input-binary-port) (char->integer #\newline))
+                  (let ([new-env `(,@env (should-has-body? . #t))]
+                      [content-length (find (lambda (pair) (equal? "content-length:" (string-downcase (car pair)))) env)])
+                    (cond 
+                      [(not content-length) (raise status:bad-request)]
+                      [(> content-length current-body-size) (raise status:bad-request)]
+                      [else `(,@new-env (body . ,(get-bytevector-n input-binary-port content-length)))]))]
+                [else 
+                  (let-values ([(new-pair newest-remain-length) (read-kv input-binary-port remain-length)])
+                    (loop (yield `(,@env ,new-pair)) '() newest-remain-length))])
+              (let-values ([(target-string newest-remain-length) ((cdr (car l)) remain-length)])
+                (loop 
+                  (yield `(,@env (,(car (car l)) . ,(string-trim-right target-string)))) 
+                  (cdr l)
+                  newest-remain-length))))))]))
 
 (define (read-kv input-binary-port length)
-  (let* ([origin-position (port-position input-binary-port)]
-      [k (string-downcase (read-to-space input-binary-port length))]
-      [current-position (port-position input-binary-port)]
-      [v (read-to-nextline/eof input-binary-port (- length (- current-position origin-position)))])
-    `(,(string-trim-right k) . ,(string-trim-right v))))
+  (let*-values ([(k consumed-length) (read-to-space input-binary-port length)]
+      [(v final-consumed-length) (read-to-nextline/eof input-binary-port (- length consumed-length))])
+    (values `(,(string-trim-right (string-downcase k)) . ,(string-trim-right v)) (- length final-consumed-length))))
 
 (define (read-to-space input-binary-port length)
-  (utf8->string 
-    (call-with-bytevector-output-port
-      (lambda (output-port)
-        (if (not (step-forward-to output-port input-binary-port (char->integer #\space) length))
-          (raise status:bad-request))))))
+  (let ([bytevector
+        (call-with-bytevector-output-port
+          (lambda (output-port)
+            (if (not (step-forward-to output-port input-binary-port (char->integer #\space) length))
+              (raise status:bad-request))))])
+    (values (utf8->string bytevector) (- length (bytevector-length bytevector)))))
 
 (define (read-to-nextline/eof input-binary-port length)
-  (utf8->string 
-    (call-with-bytevector-output-port
-      (lambda (output-port)
-        (if (not (step-forward-to output-port input-binary-port (char->integer #\newline) length))
-          (if (not (eof-object? (lookahead-u8 input-binary-port)))
-            (raise status:bad-request)))))))
+  (let ([bytevector 
+        (call-with-bytevector-output-port
+          (lambda (output-port)
+            (if (not (step-forward-to output-port input-binary-port (char->integer #\newline) length))
+              (if (not (eof-object? (lookahead-u8 input-binary-port)))
+                (raise status:bad-request)))))])
+    (values (utf8->string bytevector) (- length (bytevector-length bytevector)))))
 )
