@@ -1,0 +1,15 @@
+POST /?type=zhiwang HTTP/1.1
+Host: localhost:9304
+User-Agent: Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:88.0) Gecko/20100101 Firefox/88.0
+Accept: */*
+Accept-Language: zh-CN,en-US;q=0.7,en;q=0.3
+Accept-Encoding: gzip, deflate
+Referer: http://localhost:9304/swagger-ui.html
+Content-Type: application/json
+Origin: http://localhost:9304
+Content-Length: 48
+Connection: keep-alive
+Pragma: no-cache
+Cache-Control: no-cache
+
+SU% ( (zhiwang-lexer)) - zhiwang and TI= zhiwang

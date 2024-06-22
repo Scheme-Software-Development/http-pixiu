@@ -10,6 +10,13 @@
   (http-pixiu core protocol request-parse)
   (http-pixiu core util association))
 
+(test-begin "get body from coroutine")
+(let* ([binary-input-port (open-file-input-port "./tests/resources/http-header-with-body")]
+    [coroutine (parse-request-coroutine binary-input-port)])
+  (let-values ([(closure val) (get-values-from-coroutine coroutine 'body)] )
+    (test-equal "SU% ( (zhiwang-lexer)) - zhiwang and TI= zhiwang" (bytevector->string val (current-transcoder)))))
+(test-end)
+
 (test-begin "get from coroutine")
 (let* ([binary-input-port (open-file-input-port "./tests/resources/http-header")]
     [coroutine (parse-request-coroutine binary-input-port)])

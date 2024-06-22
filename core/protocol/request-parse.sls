@@ -44,12 +44,13 @@
               (cond 
                 [(eof-object? (lookahead-u8 input-binary-port)) env]
                 [(= (lookahead-u8 input-binary-port) (char->integer #\newline))
+                  (get-u8 input-binary-port)
                   (let ([new-env `(,@env (should-has-body? . #t))]
-                      [content-length (find (lambda (pair) (equal? "content-length:" (string-downcase (car pair)))) env)])
+                      [content-length (assoc-ref env "content-length:")])
                     (cond 
                       [(not content-length) (raise status:bad-request)]
-                      [(> content-length current-body-size) (raise status:bad-request)]
-                      [else `(,@new-env (body . ,(get-bytevector-n input-binary-port content-length)))]))]
+                      [(> (string->number content-length) current-body-size) (raise status:bad-request)]
+                      [else `(,@new-env (body . ,(get-bytevector-n input-binary-port (string->number content-length))))]))]
                 [else 
                   (let-values ([(new-pair newest-remain-length) (read-kv input-binary-port remain-length)])
                     (loop (yield `(,@env ,new-pair)) '() newest-remain-length))])
