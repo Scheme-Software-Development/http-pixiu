@@ -1,7 +1,7 @@
 #!r6rs ; -*- mode: scheme; coding: utf-8 -*-
 (import (akku format manifest))
 
-(akku-package ("http-pixiu" "1.0.1")
+(akku-package ("http-pixiu" "1.0.2")
   (synopsis "A http server based on scheme")
   (authors "Wang Zheng")
   (license "MIT")

@@ -43,8 +43,10 @@
             (if (null? l) 
               (cond 
                 [(eof-object? (lookahead-u8 input-binary-port)) env]
-                [(= (lookahead-u8 input-binary-port) (char->integer #\newline))
-                  (get-u8 input-binary-port)
+                [(or 
+                  (= (lookahead-u8 input-binary-port) (char->integer #\return))
+                  (= (lookahead-u8 input-binary-port) (char->integer #\newline)))
+                  (read-to-nextline/eof input-binary-port 2)
                   (let ([new-env `(,@env (should-has-body? . #t))]
                       [content-length (assoc-ref env "content-length:")])
                     (cond 
