@@ -7,7 +7,7 @@
   (license "MIT")
   (depends ((chibi uri) "^0.9.0")
            ("ufo-socket" "^1.0.0")
-           ("ufo-threaded-function" "^1.0.4")
+           ("ufo-threaded-function" "^1.0.5")
            ("ufo-coroutines" "^1.0.3")
            ("chez-srfi" ">=0.0.0-akku <1.0.0"))
 )

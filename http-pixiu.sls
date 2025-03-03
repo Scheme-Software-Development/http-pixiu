@@ -5,6 +5,7 @@
 
     (http-pixiu core server)
     (http-pixiu core protocol request-parse)
+    (http-pixiu core protocol request-queue)
     (http-pixiu core protocol response)
     (http-pixiu core protocol status)
     (http-pixiu core util try)
@@ -44,16 +45,25 @@
             [(number? c) (write-response (socket-output-port socket) c '() '())]
             [else (write-response (socket-output-port socket) status:not-found '() '())]))))))
 
+; ms
+(define expire-duration 1000)
+(define ticks 1000)
+
 (define start-server
   (case-lambda 
     [(port) (start-server port (current-output-port) 1)]
     [(port thread-num) (start-server port (current-output-port) thread-num)]
     [(port log-port thread-num)
       (let* ([thread-pool (init-thread-pool thread-num)]
+          [request-queue (make-request-queue)]
           [server (make-server port log-port thread-pool)])
+        (map 
+          (lambda (i)
+            (thread-pool-add-job thread-pool (lambda () (request-queue-pop request-queue)))) 
+          (iota thread-num))
         (display "Http-pixiu is working!")
         (newline)
         (let loop ([received-socket (socket-accept (server-socket server))])
-          (thread-pool-add-job thread-pool (init-lifecycle received-socket))
+          (request-queue-push request-queue received-socket expire-duration ticks init-lifecycle)
           (loop (socket-accept (server-socket server)))))]))
 )
