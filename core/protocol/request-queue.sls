@@ -54,7 +54,6 @@
                         (tickal-task-complete new-task)
                         (tickal-task-expire new-task)))]
                     [job (lambda () 
-                      (if (current-time))
                       (let* ([now (current-time)] 
                           [nano (time-nanosecond now)]
                           [current-timestamp (+ (* 1000 (time-second now)) nano)])

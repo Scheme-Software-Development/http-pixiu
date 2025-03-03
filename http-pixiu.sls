@@ -8,7 +8,6 @@
     (http-pixiu core protocol request-queue)
     (http-pixiu core protocol response)
     (http-pixiu core protocol status)
-    (http-pixiu core util try)
     (http-pixiu core util io)
 
     (chibi uri)

@@ -8,8 +8,8 @@
   (import 
     (chezscheme)
     (ufo-coroutines)
+    (ufo-try)
     (http-pixiu core protocol status)
-    (http-pixiu core util try)
     (http-pixiu core util binary-read)
     (http-pixiu core util association)
     (only (srfi :13) string-trim-right))
