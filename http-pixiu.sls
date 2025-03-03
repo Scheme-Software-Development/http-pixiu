@@ -48,7 +48,7 @@
 
 ; ms
 (define expire-duration 1000)
-(define ticks 1000)
+(define ticks 100000)
 
 (define start-server
   (case-lambda 
