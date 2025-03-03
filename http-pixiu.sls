@@ -13,6 +13,7 @@
 
     (chibi uri)
     (ufo-socket)
+    (ufo-try)
     (ufo-thread-pool))
 
 (define private-static-path "./static")
