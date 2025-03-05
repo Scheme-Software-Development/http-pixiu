@@ -51,9 +51,10 @@
 
 (define start-server
   (case-lambda 
-    [(port) (start-server port (current-output-port) 1)]
-    [(port thread-num) (start-server port (current-output-port) thread-num)]
-    [(port log-port thread-num)
+    [(port) (start-server port (current-output-port) 1 expire-duration ticks)]
+    [(port thread-num) (start-server port (current-output-port) thread-num expire-duration ticks)]
+    [(port thread-num expire-duration ticks) (start-server port (current-output-port) thread-num expire-duration ticks)]
+    [(port log-port thread-num expire-duration ticks)
       (let* ([thread-pool (init-thread-pool thread-num)]
           [request-queue (make-request-queue)]
           [server (make-server port log-port thread-pool)])
