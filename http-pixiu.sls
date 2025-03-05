@@ -59,11 +59,15 @@
           [server (make-server port log-port thread-pool)])
         (map 
           (lambda (i)
-            (thread-pool-add-job thread-pool (lambda () (request-queue-pop request-queue)))) 
+            (thread-pool-add-job thread-pool 
+              (lambda () 
+                (let loop ()
+                  ((request-queue-pop request-queue))
+                  (loop))))) 
           (iota thread-num))
         (display "Http-pixiu is working!")
         (newline)
         (let loop ([received-socket (socket-accept (server-socket server))])
-          (request-queue-push request-queue received-socket expire-duration ticks init-lifecycle)
+          (request-queue-push request-queue (init-lifecycle received-socket) expire-duration ticks)
           (loop (socket-accept (server-socket server)))))]))
 )

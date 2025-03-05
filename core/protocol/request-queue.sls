@@ -23,24 +23,20 @@
 
 (define-record-type tickal-task 
   (fields 
-    (immutable request)
-    (immutable request-queue)
-    (immutable mutex)
     (mutable job)
     (mutable expire)
     (mutable complete))
   (protocol
     ;must have request-queue-mutex
     (lambda (new)
-      (lambda (request request-queue expire-duration ticks request-processor)
+      (lambda (job request-queue expire-duration ticks)
         (letrec* ([now (current-time)]
             [nano (time-nanosecond now)]
             ;ms
             [expire-timestamp (+ (* 1000 (time-second now)) nano)]
             [new-task 
               (new 
-                request request-queue (make-mutex) 
-                (lambda () ((make-engine (request-processor request)) ticks (tickal-task-complete new-task) (tickal-task-expire new-task)))
+                (lambda () ((make-engine job) ticks (tickal-task-complete new-task) (tickal-task-expire new-task)))
                 '() '())]
             [complete 
               (lambda (ticks value) 
@@ -48,23 +44,19 @@
                 value)]
             [expire 
               (lambda (remains) 
-                (let* ([new-pair
-                    (with-mutex (tickal-task-mutex new-task)
-                      (cons 
-                        (tickal-task-complete new-task)
-                        (tickal-task-expire new-task)))]
-                    [job (lambda () 
+                (let* ([new-job (lambda () 
                       (let* ([now (current-time)] 
                           [nano (time-nanosecond now)]
                           [current-timestamp (+ (* 1000 (time-second now)) nano)])
                         (if (< current-timestamp expire-timestamp)
-                          (remains ticks (car new-pair) (cdr new-pair))
+                          (remains ticks (tickal-task-complete new-task) (tickal-task-expire new-task))
                           (begin 
                             (remove:from-request-tickal-task-list request-queue new-task)
                             (raise status:request-timeout)))))])
-                  (tickal-task-job-set! new-task job)
+                  (tickal-task-job-set! new-task new-job)
                   (with-mutex (request-queue-mutex request-queue)
-                    (enqueue! (request-queue-queue request-queue) new-task))))])
+                    (enqueue! (request-queue-queue request-queue) new-task))
+                  (condition-signal (request-queue-condition request-queue))))])
           (enqueue! (request-queue-queue request-queue) new-task)
           (request-queue-tickal-task-list-set! 
             request-queue
@@ -77,15 +69,9 @@
 
 (define (request-queue-pop queue)
   (with-mutex (request-queue-mutex queue)
-    (let loop ()
-      (if (queue-empty? (request-queue-queue queue))
-        (begin
-          (condition-wait (request-queue-condition queue) (request-queue-mutex queue))
-          (loop))
-        (letrec* ([task (dequeue! (request-queue-queue queue))]
-            [job (tickal-task-request task)])
-          ;will be in another thread
-          (job))))))
+    (if (queue-empty? (request-queue-queue queue))
+      (condition-wait (request-queue-condition queue) (request-queue-mutex queue)))
+    (tickal-task-job (dequeue! (request-queue-queue queue)))))
 
 (define (remove:from-request-tickal-task-list queue task)
   (with-mutex (request-queue-mutex queue)
@@ -93,8 +79,8 @@
       queue
       (remove task (request-queue-tickal-task-list queue)))))
 
-(define (request-queue-push queue request expire-duration ticks request-processor)
+(define (request-queue-push queue request-thunk expire-duration ticks)
   (with-mutex (request-queue-mutex queue)
-    (make-tickal-task request queue expire-duration ticks request-processor))
-  (condition-signal (request-queue-condition queue)))
+    (make-tickal-task request-thunk queue expire-duration ticks))
+  (condition-broadcast (request-queue-condition queue)))
 )
