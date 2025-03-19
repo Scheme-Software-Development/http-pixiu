@@ -15,7 +15,7 @@
 (test-begin "http client")
 
 (let ([client (make-client "www.baidu.com" "80" '())]
-        [request-string (construct-request-string "get" "/" "HTTP/1.0" '())])
+        [request-string (construct-request-string "get" "/" "HTTP/1.1" '())])
 (pretty-print 1)
     ; (call-with-socket (client-socket client)
     (pretty-print request-string)
