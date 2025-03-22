@@ -16,6 +16,7 @@
         "\r\n")]
     [(method url version header-alist body)
       (string-append 
-        (construct-request-string method url version header-alist)
-        body)]))
+        (construct-request-string method url version 
+            `(,@header-alist ("content-length" . ,(bytevector-length (string->utf8 body)))))
+          body)]))
 )

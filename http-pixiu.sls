@@ -6,7 +6,7 @@
     (http-pixiu core server)
     (http-pixiu core protocol request-parse)
     (http-pixiu core protocol request-queue)
-    (http-pixiu core protocol response)
+    (http-pixiu core protocol response-construct)
     (http-pixiu core protocol status)
     (http-pixiu core util io)
 

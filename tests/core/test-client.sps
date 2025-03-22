@@ -16,16 +16,11 @@
 
 (let ([client (make-client "www.baidu.com" "80" '())]
         [request-string (construct-request-string "get" "/" "HTTP/1.1" '())])
-(pretty-print 1)
-    ; (call-with-socket (client-socket client)
-    (pretty-print request-string)
-        (client-send client (string->utf8 request-string))
-(pretty-print 2)
-        (pretty-print 
-        (utf8->string (client-receive client))
-        )
-(pretty-print 3)
-    ; )
+    (client-send client (string->utf8 request-string))
+    ; (pretty-print 
+    ;     (utf8->string (client-receive client))
+    ;     )
+    (test-equal #t (string? (utf8->string (client-receive client))))
     )
 (test-end)
 
