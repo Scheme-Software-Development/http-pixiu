@@ -8,7 +8,7 @@
   (case-lambda 
     [(method url version header-alist)
       (string-append 
-        method " " url " " version "\r\n"
+        (symbol->string method) " " url " " version "\r\n"
         (fold-left
           string-append
           ""
@@ -17,6 +17,6 @@
     [(method url version header-alist body)
       (string-append 
         (construct-request-string method url version 
-            `(,@header-alist ("content-length" . ,(bytevector-length (string->utf8 body)))))
+            `(,@header-alist ("Content-Length" . ,(number->string (bytevector-length (string->utf8 body))))))
           body)]))
 )

@@ -1,10 +1,9 @@
 (library (http-pixiu core protocol response-parse)
   (export 
-    write-response)
+    parse-response-coroutine)
   (import 
     (chezscheme)
     (ufo-coroutines)
-    (ufo-try)
     (http-pixiu core protocol status)
     (http-pixiu core util binary-read)
     (http-pixiu core util association)
@@ -25,7 +24,7 @@
 
 (define parse-response-coroutine 
   (case-lambda 
-    [(input-binary-port) (parse-response-coroutine input-binary-port request-header-size request-body-size)]
+    [(input-binary-port) (parse-response-coroutine input-binary-port response-header-size response-body-size)]
     [(input-binary-port current-header-size current-body-size)
       (init-coroutine
         (lambda (yield)
@@ -46,8 +45,8 @@
                   (let ([new-env `(,@env (should-has-body? . #t))]
                       [content-length (assoc-ref env "content-length:")])
                     (cond 
-                      [(not content-length) (raise status:bad-response)]
-                      [(> (string->number content-length) current-body-size) (raise status:bad-response)]
+                      [(not content-length) (raise 'status:bad-response)]
+                      [(> (string->number content-length) current-body-size) (raise 'status:bad-response)]
                       [else `(,@new-env (body . ,(get-bytevector-n input-binary-port (string->number content-length))))]))]
                 [else 
                   (let-values ([(new-pair newest-remain-length) (read-kv input-binary-port remain-length)])
@@ -68,7 +67,7 @@
         (call-with-bytevector-output-port
           (lambda (output-port)
             (if (not (step-forward-to output-port input-binary-port (char->integer #\space) length))
-              (raise status:bad-response))))])
+              (raise 'status:bad-response))))])
     (values (utf8->string bytevector) (- length (bytevector-length bytevector)))))
 
 (define (read-to-nextline/eof input-binary-port length)
@@ -77,6 +76,6 @@
           (lambda (output-port)
             (if (not (step-forward-to output-port input-binary-port (char->integer #\newline) length))
               (if (not (eof-object? (lookahead-u8 input-binary-port)))
-                (raise status:bad-response)))))])
+                (raise 'status:bad-response)))))])
     (values (utf8->string bytevector) (- length (bytevector-length bytevector)))))
 )
