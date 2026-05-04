@@ -2,7 +2,8 @@
   (export 
     make-request-queue
     request-queue-pop
-    request-queue-push)
+    request-queue-push
+    request-queue-shutdown)
   (import 
     (chezscheme)
     (slib queue)
@@ -15,11 +16,12 @@
     (immutable mutex)
     (immutable condition)
     (immutable queue)
-    (mutable tickal-task-list))
+    (mutable tickal-task-list)
+    (mutable shutdown?))
   (protocol
     (lambda (new)
       (lambda ()
-        (new (make-mutex) (make-condition) (make-queue) '())))))
+        (new (make-mutex) (make-condition) (make-queue) '() #f)))))
 
 (define-record-type tickal-task 
   (fields 
@@ -70,8 +72,17 @@
 (define (request-queue-pop queue)
   (with-mutex (request-queue-mutex queue)
     (if (queue-empty? (request-queue-queue queue))
-      (condition-wait (request-queue-condition queue) (request-queue-mutex queue)))
-    (tickal-task-job (dequeue! (request-queue-queue queue)))))
+      (if (request-queue-shutdown? queue)
+        #f
+        (begin
+          (condition-wait (request-queue-condition queue) (request-queue-mutex queue))
+          (request-queue-pop queue)))
+      (tickal-task-job (dequeue! (request-queue-queue queue))))))
+
+(define (request-queue-shutdown queue)
+  (with-mutex (request-queue-mutex queue)
+    (request-queue-shutdown?-set! queue #t)
+    (condition-broadcast (request-queue-condition queue))))
 
 (define (remove:from-request-tickal-task-list queue task)
   (with-mutex (request-queue-mutex queue)
