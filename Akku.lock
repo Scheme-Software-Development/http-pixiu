@@ -52,6 +52,11 @@
    (url "https://archive.akkuscm.org/archive/pkg/u/ufo-thread-pool_1.0.4_repack.tar.xz"))
   (content
    (sha256 "bbcafe03f57784e85c6a37b99d678670a93c464df2bc14d576e2e608519f90a3")))
+ ((name "r6lint")
+  (location
+   (url "https://archive.akkuscm.org/archive/pkg/r/r6lint_0.1.0_repack.tar.xz"))
+  (content
+   (sha256 "3240edb0411555d3cb9591a4643359e6b3d3bb1078606d1a3351d9d9f0c56854")))
  ((name "ufo-try")
   (location
    (url "https://archive.akkuscm.org/archive/pkg/u/ufo-try_1.0.0_repack.tar.xz"))
