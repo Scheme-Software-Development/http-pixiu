@@ -4,6 +4,7 @@
     server?
 
     server-socket
+    server-log-port
     server-thread-pool)
   (import 
     (chezscheme)

@@ -23,8 +23,6 @@
     (ufo-try)
     (ufo-thread-pool))
 
-(define private-static-path "./static")
-
 (define (log-date->string date)
   (string-append
     (number->string (date-year date)) "-"
@@ -46,18 +44,37 @@
           "\n"))
       (flush-output-port log-port))))
 
-(define (safe-path? uri-path)
-  (define (check-double-dot s i)
-    (and (< (+ i 2) (string-length s))
-         (char=? (string-ref s i) #\.)
-         (char=? (string-ref s (+ i 1)) #\.)
-         (or (zero? i)
-             (char=? (string-ref s (- i 1)) #\/))))
-  (let ([full (string-append private-static-path uri-path)])
+(define (string-trim-both s)
+  (let ([len (string-length s)])
+    (let loop-start ([i 0])
+      (if (and (< i len) (char-whitespace? (string-ref s i)))
+          (loop-start (+ i 1))
+          (let loop-end ([j len])
+            (if (and (> j i) (char-whitespace? (string-ref s (- j 1))))
+                (loop-end (- j 1))
+                (substring s i j)))))))
+
+(define (connection-close? headers protocol)
+  (let ([conn (assoc-ref headers "connection:")])
+    (cond
+      [(equal? protocol "HTTP/1.1")
+       (and conn (equal? (string-downcase (string-trim-both conn)) "close"))]
+      [else
+       (or (not conn) (not (equal? (string-downcase (string-trim-both conn)) "keep-alive")))])))
+
+(define (safe-path? static-path uri-path)
+  (let ([full (string-append static-path uri-path)])
     (let loop ([i 0])
       (cond
         [(>= i (string-length full)) #t]
-        [(check-double-dot full i) #f]
+        [(and (char=? (string-ref full i) #\.)
+              (< (+ i 1) (string-length full))
+              (char=? (string-ref full (+ i 1)) #\.)
+              (or (zero? i)
+                  (char=? (string-ref full (- i 1)) #\/))
+              (or (>= (+ i 2) (string-length full))
+                  (char=? (string-ref full (+ i 2)) #\/)))
+         #f]
         [else (loop (+ i 1))]))))
 
 (define (consume-coroutine closure)
@@ -80,42 +97,73 @@
           (headers . ,headers)
           (body . ,(if body-pair (cdr body-pair) #f)))))))
 
-(define (init-lifecycle socket handler log-port)
+(define (init-lifecycle socket handler log-port static-path)
   (lambda ()
     (call-with-socket socket
       (lambda (socket)
-        (try 
-          (let* ([binary-input-port (socket-input-port socket)]
-                 [binary-output-port (socket-output-port socket)]
-                 [closure (parse-request-coroutine binary-input-port)])
-            (let*-values ([(closure0 method) (get-values-from-coroutine closure 'method)]
-                          [(closure1 target-string) (get-values-from-coroutine closure0 'uri)])
-              (let* ([uri (string->path-uri 'http target-string)]
-                     [path (uri-path uri)])
-                (if (and handler 
-                         (handler (build-request-env closure1 method target-string) binary-output-port))
-                    (begin
-                      (log-access log-port method path status:ok 0)
-                      'handler-done)
-                    (if (not (safe-path? path))
+        (let ([binary-input-port (socket-input-port socket)]
+              [binary-output-port (socket-output-port socket)])
+          (let loop ()
+            (try 
+              (let ([closure (parse-request-coroutine binary-input-port)])
+                (let*-values ([(closure0 method) (get-values-from-coroutine closure 'method)]
+                              [(closure1 target-string) (get-values-from-coroutine closure0 'uri)])
+                  (let* ([env (build-request-env closure1 method target-string)]
+                         [path (assq-ref env 'path)]
+                         [headers (assq-ref env 'headers)]
+                         [protocol (assq-ref env 'protocol)]
+                         [close? (connection-close? headers protocol)])
+                    (if (and handler 
+                             (handler env binary-output-port))
                         (begin
-                          (write-response binary-output-port status:forbidden '() '())
-                          (log-access log-port method path status:forbidden 0))
-                        (let ([local (string-append private-static-path path)])
-                          (let ([fip (open-file-input-port local)])
-                            (let ([body (get-bytevector-all fip)]
-                                  [content-type (guess-mime-type path)])
-                              (write-response binary-output-port status:ok 
-                                `(("Content-Type" . ,content-type)) body
-                                (not (equal? method "HEAD")))
-                              (log-access log-port method path status:ok (if (bytevector? body) (bytevector-length body) 0))))))))))
-          (except c
-            [(number? c) 
-             (write-response (socket-output-port socket) c '() '())
-             (log-access log-port "UNKNOWN" "/" c 0)]
-            [else 
-             (write-response (socket-output-port socket) status:not-found '() '())
-             (log-access log-port "UNKNOWN" "/" status:not-found 0)])))))
+                          (log-access log-port method path status:ok 0)
+                          (flush-output-port binary-output-port)
+                          (if (not close?) (loop)))
+                        (if (not (safe-path? static-path path))
+                            (begin
+                              (write-response binary-output-port status:forbidden '() '() #t (not close?))
+                              (log-access log-port method path status:forbidden 0)
+                              (flush-output-port binary-output-port)
+                              (if (not close?) (loop)))
+                            (let ([local (string-append static-path path)])
+                              (let ([fip (guard (ex [#t #f])
+                                           (open-file-input-port local))])
+                                (let ([actual-fip 
+                                       (if (not fip)
+                                           (guard (ex [#t #f])
+                                             (open-file-input-port (string-append local "/index.html")))
+                                           fip)]
+                                      [actual-path 
+                                       (if (not fip)
+                                           (string-append path "/index.html")
+                                           path)])
+                                  (if (not actual-fip)
+                                      (if (file-exists? local)
+                                          (begin
+                                            (write-response binary-output-port status:forbidden '() '() #t (not close?))
+                                            (log-access log-port method path status:forbidden 0))
+                                          (begin
+                                            (write-response binary-output-port status:not-found '() '() #t (not close?))
+                                            (log-access log-port method path status:not-found 0)))
+                                      (let ([size (file-length actual-fip)]
+                                            [content-type (guess-mime-type actual-path)])
+                                        (write-response binary-output-port status:ok 
+                                          `(("Content-Type" . ,content-type)) (cons actual-fip size)
+                                          (not (equal? method "HEAD"))
+                                          (not close?))
+                                        (close-input-port actual-fip)
+                                        (log-access log-port method path status:ok size))))
+                                  (flush-output-port binary-output-port)
+                                  (if (not close?) (loop)))))))))))))
+              (except c
+                [(number? c) 
+                 (write-response (socket-output-port socket) c '() '() #t #f)
+                 (log-access log-port "UNKNOWN" "/" c 0)
+                 (flush-output-port (socket-output-port socket))]
+                [else 
+                 (write-response (socket-output-port socket) status:internal-server-error '() '() #t #f)
+                 (log-access log-port "UNKNOWN" "/" status:internal-server-error 0)
+                 (flush-output-port (socket-output-port socket))]))))))))
 
 ; ms
 (define expire-duration 1000)
@@ -132,11 +180,13 @@
 
 (define start-server
   (case-lambda 
-    [(port) (start-server port (current-output-port) 1 expire-duration ticks #f)]
-    [(port thread-num) (start-server port (current-output-port) thread-num expire-duration ticks #f)]
-    [(port thread-num expire-duration ticks) (start-server port (current-output-port) thread-num expire-duration ticks #f)]
-    [(port log-port thread-num expire-duration ticks) (start-server port log-port thread-num expire-duration ticks #f)]
+    [(port) (start-server port (current-output-port) 1 expire-duration ticks #f "./static")]
+    [(port thread-num) (start-server port (current-output-port) thread-num expire-duration ticks #f "./static")]
+    [(port thread-num expire-duration ticks) (start-server port (current-output-port) thread-num expire-duration ticks #f "./static")]
+    [(port log-port thread-num expire-duration ticks) (start-server port log-port thread-num expire-duration ticks #f "./static")]
     [(port log-port thread-num expire-duration ticks handler)
+     (start-server port log-port thread-num expire-duration ticks handler "./static")]
+    [(port log-port thread-num expire-duration ticks handler static-path)
       (set! shutdown-flag #f)
       (let* ([thread-pool (init-thread-pool thread-num)]
              [request-queue (make-request-queue)]
@@ -172,7 +222,7 @@
                      (guard (ex [#t #f]) (socket-accept (server-socket server)))])
                 (if received-socket
                     (begin
-                      (request-queue-push request-queue (init-lifecycle received-socket handler (server-log-port server)) expire-duration ticks)
+                      (request-queue-push request-queue (init-lifecycle received-socket handler (server-log-port server) static-path) expire-duration ticks)
                       (loop))
                     (begin
                       (if shutdown-flag
@@ -185,5 +235,5 @@
                           (begin
                             (display "Socket accept failed, retrying...")
                             (newline)
+                            (sleep (make-time 'time-duration 50000000 0))
                             (loop)))))))))]))
-

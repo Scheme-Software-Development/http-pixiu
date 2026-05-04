@@ -58,9 +58,12 @@
 (define write-response
   (case-lambda
     [(binary-output-port status-id alist body)
-     (write-response binary-output-port status-id alist body #t)]
+     (write-response binary-output-port status-id alist body #t #f)]
     [(binary-output-port status-id alist body send-body?)
-     (let ([body-bytevector (if (string? body) (string->utf8 body) body)])
+     (write-response binary-output-port status-id alist body send-body? #f)]
+    [(binary-output-port status-id alist body send-body? keep-alive?)
+     (let ([is-stream (and (pair? body) (input-port? (car body)) (number? (cdr body)))]
+           [body-bytevector (if (string? body) (string->utf8 body) body)])
        (put-bytevector binary-output-port (string->bytevector "HTTP/1.1 " (current-transcoder)))
        (put-bytevector binary-output-port (string->bytevector (number->string status-id) (current-transcoder)))
        (put-bytevector binary-output-port (string->bytevector " " (current-transcoder)))
@@ -77,32 +80,61 @@
              ""
              (map (lambda (p) (string-append (car p) ": " (cdr p) "\r\n")) alist))
            (current-transcoder)))
-       (if (bytevector? body-bytevector)
-         (begin 
-           (put-bytevector binary-output-port (string->bytevector "Content-Length: " (current-transcoder)))
-           (put-bytevector binary-output-port (string->bytevector (number->string (bytevector-length body-bytevector)) (current-transcoder)))
-           (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder)))
-           (put-bytevector binary-output-port (string->bytevector "Connection: close\r\n" (current-transcoder)))
-           (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder)))
-           (if send-body?
-             (put-bytevector binary-output-port body-bytevector)))
-         (begin
-           (put-bytevector binary-output-port (string->bytevector "Connection: close\r\n" (current-transcoder)))
-           (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder))))))]))
+       (let ([body-size (cond
+                          [is-stream (cdr body)]
+                          [(bytevector? body-bytevector) (bytevector-length body-bytevector)]
+                          [else #f])])
+         (if body-size
+           (begin 
+             (put-bytevector binary-output-port (string->bytevector "Content-Length: " (current-transcoder)))
+             (put-bytevector binary-output-port (string->bytevector (number->string body-size) (current-transcoder)))
+             (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder)))
+             (put-bytevector binary-output-port 
+               (string->bytevector 
+                 (if keep-alive? "Connection: keep-alive\r\n" "Connection: close\r\n") 
+                 (current-transcoder)))
+             (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder)))
+             (if send-body?
+               (if is-stream
+                 (let ([port (car body)] [buff (make-bytevector 65536)])
+                   (let loop ()
+                     (let ([n (get-bytevector-n! port buff 0 65536)])
+                       (if (and n (not (eof-object? n)) (> n 0))
+                         (begin (put-bytevector binary-output-port buff 0 n) (loop))
+                         (void)))))
+                 (put-bytevector binary-output-port body-bytevector)))
+           (begin
+             (put-bytevector binary-output-port 
+               (string->bytevector 
+                 (if keep-alive? "Connection: keep-alive\r\n" "Connection: close\r\n") 
+                 (current-transcoder)))
+             (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder))))))))]))
 
-(define (write-json-response out status-id alist body)
-  (write-response out status-id 
-    (cons (cons "Content-Type" "application/json") alist)
-    body))
+(define write-json-response
+  (case-lambda
+    [(out status-id alist body)
+     (write-json-response out status-id alist body #f)]
+    [(out status-id alist body keep-alive?)
+     (write-response out status-id 
+       (cons (cons "Content-Type" "application/json") alist)
+       body #t keep-alive?)]))
 
-(define (write-text-response out status-id alist body)
-  (write-response out status-id 
-    (cons (cons "Content-Type" "text/plain") alist)
-    body))
+(define write-text-response
+  (case-lambda
+    [(out status-id alist body)
+     (write-text-response out status-id alist body #f)]
+    [(out status-id alist body keep-alive?)
+     (write-response out status-id 
+       (cons (cons "Content-Type" "text/plain") alist)
+       body #t keep-alive?)]))
 
-(define (write-html-response out status-id alist body)
-  (write-response out status-id 
-    (cons (cons "Content-Type" "text/html") alist)
-    body))
+(define write-html-response
+  (case-lambda
+    [(out status-id alist body)
+     (write-html-response out status-id alist body #f)]
+    [(out status-id alist body keep-alive?)
+     (write-response out status-id 
+       (cons (cons "Content-Type" "text/html") alist)
+       body #t keep-alive?)]))
 
 )

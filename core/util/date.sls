@@ -13,6 +13,9 @@
       [5 "Fri"]
       [6 "Sat"])
     ", "
+    (if (< (date-day date) 10)
+      "0"
+      "")
     (number->string (date-day date))
     " "
     (case (date-month date)
@@ -46,5 +49,5 @@
       "")
     (number->string (date-second date))
     " "
-    (date-zone-name date)))
+    "GMT"))
 )

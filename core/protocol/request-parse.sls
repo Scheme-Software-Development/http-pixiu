@@ -52,11 +52,19 @@
                   (= (lookahead-u8 input-binary-port) (char->integer #\return))
                   (= (lookahead-u8 input-binary-port) (char->integer #\newline)))
                   (read-to-nextline/eof input-binary-port 2)
-                  (let ([new-env `(,@env (should-has-body? . #t))]
+                  (let ([method (assoc-ref env 'method)]
+                      [new-env `(,@env (should-has-body? . #t))]
                       [content-length (assoc-ref env "content-length:")])
                     (cond 
+                      [(and (not content-length)
+                            (or (equal? method "GET")
+                                (equal? method "HEAD")
+                                (equal? method "DELETE")
+                                (equal? method "OPTIONS")
+                                (equal? method "TRACE")))
+                       env]
                       [(not content-length) (raise status:bad-request)]
-                      [(> (string->number content-length) current-body-size) (raise status:bad-request)]
+                      [(guard (ex [#t #t]) (> (string->number content-length) current-body-size)) (raise status:bad-request)]
                       [else `(,@new-env (body . ,(get-bytevector-n input-binary-port (string->number content-length))))]))]
                 [else 
                   (if (>= header-count max-header-lines)

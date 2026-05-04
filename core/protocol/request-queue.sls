@@ -35,7 +35,7 @@
         (letrec* ([now (current-time)]
             [nano (time-nanosecond now)]
             ;ms
-            [expire-timestamp (+ (* 1000 (time-second now)) nano)]
+            [expire-timestamp (+ (* 1000 (time-second now)) (div nano 1000000) expire-duration)]
             [new-task 
               (new 
                 (lambda () ((make-engine job) ticks (tickal-task-complete new-task) (tickal-task-expire new-task)))
@@ -49,7 +49,7 @@
                 (let* ([new-job (lambda () 
                       (let* ([now (current-time)] 
                           [nano (time-nanosecond now)]
-                          [current-timestamp (+ (* 1000 (time-second now)) nano)])
+                          [current-timestamp (+ (* 1000 (time-second now)) (div nano 1000000))])
                         (if (< current-timestamp expire-timestamp)
                           (remains ticks (tickal-task-complete new-task) (tickal-task-expire new-task))
                           (begin 
