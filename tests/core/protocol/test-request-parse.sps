@@ -59,4 +59,40 @@
   ("pragma:" . "no-cache") ("cache-control:" . "no-cache")))))))
 (test-end)
 
+(test-begin "parse GET without Content-Length")
+(let* ([request "GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n"]
+       [binary-input-port (open-bytevector-input-port (string->utf8 request))]
+       [coroutine (parse-request-coroutine binary-input-port)])
+  (let loop ([c coroutine] [env '()])
+    (let-values ([(resume val) (c)])
+      (if resume
+          (loop (lambda () (resume val)) (list val))
+          (begin
+            (test-equal (assq-ref val 'method) "GET")
+            (test-equal (assq-ref val 'uri) "/hello")
+            (test-equal (assq-ref val 'protocol) "HTTP/1.1"))))))
+(test-end)
+
+(test-begin "parse HEAD without Content-Length")
+(let* ([request "HEAD /hello HTTP/1.1\r\nHost: localhost\r\n\r\n"]
+       [binary-input-port (open-bytevector-input-port (string->utf8 request))]
+       [coroutine (parse-request-coroutine binary-input-port)])
+  (let loop ([c coroutine] [env '()])
+    (let-values ([(resume val) (c)])
+      (if resume
+          (loop (lambda () (resume val)) (list val))
+          (test-equal (assq-ref val 'method) "HEAD")))))
+(test-end)
+
+(test-begin "parse DELETE without Content-Length")
+(let* ([request "DELETE /hello HTTP/1.1\r\nHost: localhost\r\n\r\n"]
+       [binary-input-port (open-bytevector-input-port (string->utf8 request))]
+       [coroutine (parse-request-coroutine binary-input-port)])
+  (let loop ([c coroutine] [env '()])
+    (let-values ([(resume val) (c)])
+      (if resume
+          (loop (lambda () (resume val)) (list val))
+          (test-equal (assq-ref val 'method) "DELETE")))))
+(test-end)
+
 (exit (if (zero? (test-runner-fail-count (test-runner-get))) 0 1))

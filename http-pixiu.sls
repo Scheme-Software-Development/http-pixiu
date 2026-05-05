@@ -5,6 +5,8 @@
           write-json-response
           write-text-response
           write-html-response
+          safe-path?
+          connection-close?
           assoc-ref)
   (import 
     (chezscheme)
@@ -20,7 +22,6 @@
 
     (chibi uri)
     (ufo-socket)
-    (ufo-try)
     (ufo-thread-pool))
 
 (define (log-date->string date)
@@ -97,6 +98,91 @@
           (headers . ,headers)
           (body . ,(if body-pair (cdr body-pair) #f)))))))
 
+; ms
+(define expire-duration 1000)
+(define ticks 100000)
+
+(define shutdown-flag #f)
+
+(define stop-server
+  (case-lambda
+    [(server request-queue)
+     (stop-server server request-queue #f)]
+    [(server request-queue port)
+     (set! shutdown-flag #t)
+     (display "Graceful shutdown initiated...")
+     (newline)
+     (request-queue-shutdown request-queue)
+     (when port
+       (guard (ex [#t (void)])
+         (let ([dummy (make-client-socket "127.0.0.1" port)])
+           (socket-close dummy))))
+     (guard (ex [#t (void)]) (socket-close (server-socket server)))]))
+
+(define *current-server-info* #f)
+
+(define start-server
+  (case-lambda 
+    [(port) (start-server port (current-output-port) 1 expire-duration ticks #f "./static")]
+    [(port thread-num) (start-server port (current-output-port) thread-num expire-duration ticks #f "./static")]
+    [(port thread-num expire-duration ticks) (start-server port (current-output-port) thread-num expire-duration ticks #f "./static")]
+    [(port log-port thread-num expire-duration ticks) (start-server port log-port thread-num expire-duration ticks #f "./static")]
+    [(port log-port thread-num expire-duration ticks handler)
+     (start-server port log-port thread-num expire-duration ticks handler "./static")]
+    [(port log-port thread-num expire-duration ticks handler static-path)
+      (set! shutdown-flag #f)
+      (let* ([thread-pool (init-thread-pool thread-num)]
+             [request-queue (make-request-queue)]
+             [server (make-server port log-port thread-pool)])
+        (set! *current-server-info* (cons server request-queue))
+        (register-signal-handler 2
+          (lambda (sig)
+            (stop-server server request-queue)))
+        (map 
+          (lambda (i)
+            (thread-pool-add-job thread-pool 
+              (lambda () 
+                (let loop ()
+                  (let ([job (request-queue-pop request-queue)])
+                    (if job
+                        (begin
+                          (job)
+                          (loop))
+                        (begin
+                          (display "Worker shutting down.")
+                          (newline))))))))
+          (iota thread-num))
+        (display "Http-pixiu is working!")
+        (newline)
+        (let loop ()
+          (if shutdown-flag
+              (begin
+                (display "Waiting for workers to finish...")
+                (newline)
+                (sleep (make-time 'time-duration 0 2))
+                (display "Shutdown complete.")
+                (newline)
+                (cons server request-queue))
+              (let ([received-socket 
+                     (guard (ex [#t #f]) (socket-accept (server-socket server)))])
+                (if received-socket
+                    (begin
+                      (request-queue-push request-queue (init-lifecycle received-socket handler (server-log-port server) static-path) expire-duration ticks)
+                      (loop))
+                    (begin
+                      (if shutdown-flag
+                          (begin
+                            (display "Waiting for workers to finish...")
+                            (newline)
+                            (sleep (make-time 'time-duration 0 2))
+                            (display "Shutdown complete.")
+                            (newline)
+                            (cons server request-queue))
+                          (begin
+                            (display "Socket accept failed, retrying...")
+                            (newline)
+                            (sleep (make-time 'time-duration 50000000 0))
+                            (loop)))))))))]))
 (define (init-lifecycle socket handler log-port static-path)
   (lambda ()
     (call-with-socket socket
@@ -104,7 +190,15 @@
         (let ([binary-input-port (socket-input-port socket)]
               [binary-output-port (socket-output-port socket)])
           (let loop ()
-            (try 
+            (guard (c
+                     [(number? c) 
+                      (write-response (socket-output-port socket) c '() '() #t #f)
+                      (log-access log-port "UNKNOWN" "/" c 0)
+                      (flush-output-port (socket-output-port socket))]
+                     [else 
+                      (write-response (socket-output-port socket) status:internal-server-error '() '() #t #f)
+                      (log-access log-port "UNKNOWN" "/" status:internal-server-error 0)
+                      (flush-output-port (socket-output-port socket))])
               (let ([closure (parse-request-coroutine binary-input-port)])
                 (let*-values ([(closure0 method) (get-values-from-coroutine closure 'method)]
                               [(closure1 target-string) (get-values-from-coroutine closure0 'uri)])
@@ -147,93 +241,14 @@
                                             (log-access log-port method path status:not-found 0)))
                                       (let ([size (file-length actual-fip)]
                                             [content-type (guess-mime-type actual-path)])
-                                        (write-response binary-output-port status:ok 
-                                          `(("Content-Type" . ,content-type)) (cons actual-fip size)
-                                          (not (equal? method "HEAD"))
-                                          (not close?))
-                                        (close-input-port actual-fip)
-                                        (log-access log-port method path status:ok size))))
+                                        (let ([bv (make-bytevector size)])
+                                          (get-bytevector-n! actual-fip bv 0 size)
+                                          (write-response binary-output-port status:ok 
+                                            `(("Content-Type" . ,content-type)) bv
+                                            (not (equal? method "HEAD"))
+                                            (not close?))
+                                          (close-input-port actual-fip)
+                                          (log-access log-port method path status:ok size))))
                                   (flush-output-port binary-output-port)
-                                  (if (not close?) (loop)))))))))))))
-              (except c
-                [(number? c) 
-                 (write-response (socket-output-port socket) c '() '() #t #f)
-                 (log-access log-port "UNKNOWN" "/" c 0)
-                 (flush-output-port (socket-output-port socket))]
-                [else 
-                 (write-response (socket-output-port socket) status:internal-server-error '() '() #t #f)
-                 (log-access log-port "UNKNOWN" "/" status:internal-server-error 0)
-                 (flush-output-port (socket-output-port socket))]))))))))
+                                  (if (not close?) (loop))))))))))))))))))
 
-; ms
-(define expire-duration 1000)
-(define ticks 100000)
-
-(define shutdown-flag #f)
-
-(define (stop-server server request-queue)
-  (set! shutdown-flag #t)
-  (display "Graceful shutdown initiated...")
-  (newline)
-  (guard (ex [#t (void)]) (socket-close (server-socket server)))
-  (request-queue-shutdown request-queue))
-
-(define start-server
-  (case-lambda 
-    [(port) (start-server port (current-output-port) 1 expire-duration ticks #f "./static")]
-    [(port thread-num) (start-server port (current-output-port) thread-num expire-duration ticks #f "./static")]
-    [(port thread-num expire-duration ticks) (start-server port (current-output-port) thread-num expire-duration ticks #f "./static")]
-    [(port log-port thread-num expire-duration ticks) (start-server port log-port thread-num expire-duration ticks #f "./static")]
-    [(port log-port thread-num expire-duration ticks handler)
-     (start-server port log-port thread-num expire-duration ticks handler "./static")]
-    [(port log-port thread-num expire-duration ticks handler static-path)
-      (set! shutdown-flag #f)
-      (let* ([thread-pool (init-thread-pool thread-num)]
-             [request-queue (make-request-queue)]
-             [server (make-server port log-port thread-pool)])
-        (register-signal-handler 2
-          (lambda (sig)
-            (stop-server server request-queue)))
-        (map 
-          (lambda (i)
-            (thread-pool-add-job thread-pool 
-              (lambda () 
-                (let loop ()
-                  (let ([job (request-queue-pop request-queue)])
-                    (if job
-                        (begin
-                          (job)
-                          (loop))
-                        (begin
-                          (display "Worker shutting down.")
-                          (newline))))))))
-          (iota thread-num))
-        (display "Http-pixiu is working!")
-        (newline)
-        (let loop ()
-          (if shutdown-flag
-              (begin
-                (display "Waiting for workers to finish...")
-                (newline)
-                (sleep (make-time 'time-duration 0 2))
-                (display "Shutdown complete.")
-                (newline))
-              (let ([received-socket 
-                     (guard (ex [#t #f]) (socket-accept (server-socket server)))])
-                (if received-socket
-                    (begin
-                      (request-queue-push request-queue (init-lifecycle received-socket handler (server-log-port server) static-path) expire-duration ticks)
-                      (loop))
-                    (begin
-                      (if shutdown-flag
-                          (begin
-                            (display "Waiting for workers to finish...")
-                            (newline)
-                            (sleep (make-time 'time-duration 0 2))
-                            (display "Shutdown complete.")
-                            (newline))
-                          (begin
-                            (display "Socket accept failed, retrying...")
-                            (newline)
-                            (sleep (make-time 'time-duration 50000000 0))
-                            (loop)))))))))]))

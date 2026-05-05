@@ -16,16 +16,14 @@
   (import (chezscheme))
 
 (define (http-method? target-string)
-  (not 
-    (boolean=? #f
-      (find 
-        (lambda (proc) (proc target-string))
-        (list 
-          http-method:get
-          http-method:head
-          http-method:post
-          http-method:put
-          http-method:delete)))))
+  (exists 
+    (lambda (proc) (proc target-string))
+    (list 
+      http-method:get?
+      http-method:head?
+      http-method:post?
+      http-method:put?
+      http-method:delete?)))
 
 (define http-method:get 'GET)
 (define (http-method:get? target-string) (equal? (symbol->string http-method:get) (string-upcase target-string)))

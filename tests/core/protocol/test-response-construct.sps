@@ -69,4 +69,29 @@
   (test-assert (not (string-contains? result "\r\n\r\nBody Here"))))
 (test-end)
 
+(test-begin "write-response keep-alive")
+(let ([result (get-response-string 
+                (lambda (out) (write-response out status:ok '() "Hi" #t #t)))])
+  (test-assert (string-contains? result "Connection: keep-alive\r\n"))
+  (test-assert (string-contains? result "\r\n\r\nHi")))
+(test-end)
+
+(test-begin "write-response streaming body")
+(let ([input (open-bytevector-input-port (string->utf8 "Streamed Content"))]
+      [size 16])
+  (let ([result (get-response-string 
+                  (lambda (out) (write-response out status:ok '() (cons input size) #t #f)))])
+    (test-assert (string-contains? result "Content-Length: 16\r\n"))
+    (test-assert (string-contains? result "\r\n\r\nStreamed Content"))))
+(test-end)
+
+(test-begin "write-response streaming HEAD no body")
+(let ([input (open-bytevector-input-port (string->utf8 "Skip Me"))]
+      [size 7])
+  (let ([result (get-response-string 
+                  (lambda (out) (write-response out status:ok '() (cons input size) #f #f)))])
+    (test-assert (string-contains? result "Content-Length: 7\r\n"))
+    (test-assert (not (string-contains? result "\r\n\r\nSkip Me")))))
+(test-end)
+
 (exit (if (zero? (test-runner-fail-count (test-runner-get))) 0 1))
