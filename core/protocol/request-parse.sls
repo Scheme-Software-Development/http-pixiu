@@ -12,7 +12,7 @@
     (http-pixiu core protocol status)
     (http-pixiu core util binary-read)
     (http-pixiu core util association)
-    (only (srfi :13) string-trim-right))
+    (only (srfi :13) string-trim-right string-trim-both))
 
 ;4kiB
 (define request-header-size (* 4 1024 1024))
@@ -54,8 +54,9 @@
                   (read-to-nextline/eof input-binary-port 2)
                   (let ([method (assoc-ref env 'method)]
                       [new-env `(,@env (should-has-body? . #t))]
-                      [content-length (assoc-ref env "content-length:")])
-                    (cond 
+                      [content-length (assoc-ref env "content-length:")]
+                      [transfer-encoding (assoc-ref env "transfer-encoding:")])
+                    (cond
                       [(and (not content-length)
                             (or (equal? method "GET")
                                 (equal? method "HEAD")
@@ -63,9 +64,16 @@
                                 (equal? method "OPTIONS")
                                 (equal? method "TRACE")))
                        env]
+                      [(and transfer-encoding
+                            (equal? (string-trim-both transfer-encoding) "chunked"))
+                       `(,@new-env (body . ,(read-chunked-body input-binary-port current-body-size)))]
                       [(not content-length) (raise status:bad-request)]
-                      [(guard (ex [#t #t]) (> (string->number content-length) current-body-size)) (raise status:bad-request)]
-                      [else `(,@new-env (body . ,(get-bytevector-n input-binary-port (string->number content-length))))]))]
+                      [else
+                       (let ([n (guard (ex [#t #f]) (string->number content-length))])
+                         (cond
+                           [(or (not n) (not (integer? n)) (< n 0)) (raise status:bad-request)]
+                           [(> n current-body-size) (raise status:bad-request)]
+                           [else `(,@new-env (body . ,(get-bytevector-n input-binary-port n)))]))]))]
                 [else 
                   (if (>= header-count max-header-lines)
                     (raise status:bad-request)
@@ -105,4 +113,34 @@
               (if (not (eof-object? (lookahead-u8 input-binary-port)))
                 (raise status:bad-request)))))])
     (values (utf8->string bytevector) (- length (bytevector-length bytevector)))))
+
+(define (read-chunked-body input-binary-port max-size)
+  (let-values (((out get-bv) (open-bytevector-output-port)))
+    (let ((line-limit 1024))
+    (let loop ((total-size 0))
+      (let-values (((size-line _) (read-to-nextline/eof input-binary-port line-limit)))
+        (let* ((trimmed (string-trim-right size-line))
+               (semi (let find-semi ((i 0))
+                       (cond
+                         ((>= i (string-length trimmed)) #f)
+                         ((char=? (string-ref trimmed i) #\;) i)
+                         (else (find-semi (+ i 1))))))
+               (hex-str (if semi (substring trimmed 0 semi) trimmed))
+               (size (guard (ex (#t #f)) (string->number hex-str 16))))
+          (cond
+            ((or (not size) (not (integer? size)) (< size 0))
+             (raise status:bad-request))
+            ((zero? size)
+             (read-to-nextline/eof input-binary-port line-limit)
+             (get-bv))
+            ((> (+ total-size size) max-size)
+             (raise status:bad-request))
+            (else
+             (let ((chunk (get-bytevector-n input-binary-port size)))
+               (if (or (not chunk) (eof-object? chunk) (< (bytevector-length chunk) size))
+                   (raise status:bad-request)
+                   (begin
+                     (put-bytevector out chunk)
+                     (read-to-nextline/eof input-binary-port line-limit)
+                     (loop (+ total-size size)))))))))))))
 )

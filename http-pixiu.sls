@@ -2,6 +2,7 @@
   (export start-server
           stop-server
           write-response
+          write-chunked-response
           write-json-response
           write-text-response
           write-html-response
@@ -22,6 +23,7 @@
 
     (chibi uri)
     (ufo-socket)
+    (ufo-socket socket c)
     (ufo-thread-pool))
 
 (define (log-date->string date)
@@ -55,6 +57,27 @@
                 (loop-end (- j 1))
                 (substring s i j)))))))
 
+(define (parse-range-header range-value file-size)
+  (let ([s (string-trim-both range-value)])
+    (if (and (>= (string-length s) 6)
+             (equal? (substring s 0 6) "bytes="))
+        (let ([rest (substring s 6 (string-length s))])
+          (let find-dash ([i 0])
+            (cond
+              [(>= i (string-length rest)) #f]
+              [(char=? (string-ref rest i) #\-)
+               (let ([start-str (string-trim-both (substring rest 0 i))]
+                     [end-str (string-trim-both (substring rest (+ i 1) (string-length rest)))])
+                 (let ([start (guard (ex [#t #f]) (string->number start-str))]
+                       [end (if (zero? (string-length end-str))
+                                (- file-size 1)
+                                (guard (ex [#t #f]) (string->number end-str)))])
+                   (if (and start end (>= start 0) (<= start end) (< end file-size))
+                       (cons start end)
+                       #f)))]
+              [else (find-dash (+ i 1))])))
+        #f)))
+
 (define (connection-close? headers protocol)
   (let ([conn (assoc-ref headers "connection:")])
     (cond
@@ -64,19 +87,20 @@
        (or (not conn) (not (equal? (string-downcase (string-trim-both conn)) "keep-alive")))])))
 
 (define (safe-path? static-path uri-path)
-  (let ([full (string-append static-path uri-path)])
-    (let loop ([i 0])
-      (cond
-        [(>= i (string-length full)) #t]
-        [(and (char=? (string-ref full i) #\.)
-              (< (+ i 1) (string-length full))
-              (char=? (string-ref full (+ i 1)) #\.)
-              (or (zero? i)
-                  (char=? (string-ref full (- i 1)) #\/))
-              (or (>= (+ i 2) (string-length full))
-                  (char=? (string-ref full (+ i 2)) #\/)))
-         #f]
-        [else (loop (+ i 1))]))))
+  (let ([decoded (uri-decode uri-path)])
+    (let ([full (string-append static-path decoded)])
+      (let loop ([i 0])
+        (cond
+          [(>= i (string-length full)) #t]
+          [(and (char=? (string-ref full i) #\.)
+                (< (+ i 1) (string-length full))
+                (char=? (string-ref full (+ i 1)) #\.)
+                (or (zero? i)
+                    (char=? (string-ref full (- i 1)) #\/))
+                (or (>= (+ i 2) (string-length full))
+                    (char=? (string-ref full (+ i 2)) #\/)))
+           #f]
+          [else (loop (+ i 1))])))))
 
 (define (consume-coroutine closure)
   (let-values ([(resume val) (closure)])
@@ -90,19 +114,63 @@
           [body-pair (assq 'body full-result)]
           [headers (filter (lambda (p) (string? (car p))) full-result)])
       (let ([uri (string->path-uri 'http uri-str)])
-        `((method . ,method)
-          (uri . ,uri-str)
-          (path . ,(uri-path uri))
-          (query . ,(guard (ex [#t #f]) (uri-query uri)))
-          (protocol . ,protocol)
-          (headers . ,headers)
-          (body . ,(if body-pair (cdr body-pair) #f)))))))
+        (let ([path (uri-path uri)])
+          ; HTTP/1.1 requires Host header
+          (when (and (equal? protocol "HTTP/1.1")
+                     (not (assoc-ref headers "host:")))
+            (raise status:bad-request))
+          `((method . ,method)
+            (uri . ,uri-str)
+            (path . ,path)
+            (query . ,(guard (ex [#t #f]) (uri-query uri)))
+            (protocol . ,protocol)
+            (headers . ,headers)
+            (body . ,(if body-pair (cdr body-pair) #f))))))))
 
-; ms
-(define expire-duration 1000)
-(define ticks 100000)
+; default request timeout in milliseconds
+(define default-expire-duration 1000)
+; default Chez Scheme engine ticks before yielding
+(define default-ticks 100000)
 
 (define shutdown-flag #f)
+
+(define (socket-set-timeout! sock ms)
+  (guard (ex [#t (void)])
+    (let ([seconds (div ms 1000)]
+          [microseconds (* (mod ms 1000) 1000)])
+      (let ([f (foreign-procedure "setsockopt" (int int int void* int) int)]
+            [sz (* 2 (foreign-sizeof 'long))])
+        (let ([tv (foreign-alloc sz)])
+          (foreign-set! 'long tv 0 seconds)
+          (foreign-set! 'long tv (foreign-sizeof 'long) microseconds)
+          (let ([rc (f (socket-file-descriptor sock) 1 20 tv sz)])
+            (foreign-free tv)
+            rc))))))
+
+(define (gzip-compress bv)
+  (let-values ([(to-stdin from-stdout from-stderr pid) (open-process-ports "gzip -c")])
+    (put-bytevector to-stdin bv)
+    (close-output-port to-stdin)
+    (let-values ([(out get) (open-bytevector-output-port)])
+      (let loop ()
+        (let ([chunk (get-bytevector-n from-stdout 65536)])
+          (if (eof-object? chunk)
+              (begin
+                (close-input-port from-stdout)
+                (close-input-port from-stderr)
+                (get))
+              (begin
+                (put-bytevector out chunk)
+                (loop))))))))
+
+(define (compressible? content-type size accept-encoding)
+  (and accept-encoding
+       (<= size (* 1024 1024))
+       (guard (ex [#t #f])
+         (string-contains? (string-downcase (string-trim-both accept-encoding)) "gzip"))
+       (or (and (>= (string-length content-type) 5)
+                (equal? (substring content-type 0 5) "text/"))
+           (member content-type '("application/javascript" "application/json" "application/xml")))))
 
 (define stop-server
   (case-lambda
@@ -123,8 +191,8 @@
 
 (define start-server
   (case-lambda 
-    [(port) (start-server port (current-output-port) 1 expire-duration ticks #f "./static")]
-    [(port thread-num) (start-server port (current-output-port) thread-num expire-duration ticks #f "./static")]
+    [(port) (start-server port (current-output-port) 1 default-expire-duration default-ticks #f "./static")]
+    [(port thread-num) (start-server port (current-output-port) thread-num default-expire-duration default-ticks #f "./static")]
     [(port thread-num expire-duration ticks) (start-server port (current-output-port) thread-num expire-duration ticks #f "./static")]
     [(port log-port thread-num expire-duration ticks) (start-server port log-port thread-num expire-duration ticks #f "./static")]
     [(port log-port thread-num expire-duration ticks handler)
@@ -132,7 +200,8 @@
     [(port log-port thread-num expire-duration ticks handler static-path)
       (set! shutdown-flag #f)
       (let* ([thread-pool (init-thread-pool thread-num)]
-             [request-queue (make-request-queue)]
+             [max-queue-size (max (* thread-num 16) 64)]
+             [request-queue (make-request-queue max-queue-size)]
              [server (make-server port log-port thread-pool)])
         (set! *current-server-info* (cons server request-queue))
         (register-signal-handler 2
@@ -166,9 +235,11 @@
               (let ([received-socket 
                      (guard (ex [#t #f]) (socket-accept (server-socket server)))])
                 (if received-socket
-                    (begin
-                      (request-queue-push request-queue (init-lifecycle received-socket handler (server-log-port server) static-path) expire-duration ticks)
-                      (loop))
+                    (if (request-queue-push request-queue (init-lifecycle received-socket handler (server-log-port server) static-path) expire-duration ticks)
+                        (loop)
+                        (begin
+                          (guard (ex [#t (void)]) (socket-close received-socket))
+                          (loop)))
                     (begin
                       (if shutdown-flag
                           (begin
@@ -187,18 +258,19 @@
   (lambda ()
     (call-with-socket socket
       (lambda (socket)
+        (socket-set-timeout! socket 30000)
         (let ([binary-input-port (socket-input-port socket)]
               [binary-output-port (socket-output-port socket)])
-          (let loop ()
+          (let loop ([request-count 0])
             (guard (c
-                     [(number? c) 
-                      (write-response (socket-output-port socket) c '() '() #t #f)
+                     [(number? c)
+                      (write-response binary-output-port c '() '() #t #f)
                       (log-access log-port "UNKNOWN" "/" c 0)
-                      (flush-output-port (socket-output-port socket))]
-                     [else 
-                      (write-response (socket-output-port socket) status:internal-server-error '() '() #t #f)
+                      (flush-output-port binary-output-port)]
+                     [else
+                      (write-response binary-output-port status:internal-server-error '() '() #t #f)
                       (log-access log-port "UNKNOWN" "/" status:internal-server-error 0)
-                      (flush-output-port (socket-output-port socket))])
+                      (flush-output-port binary-output-port)])
               (let ([closure (parse-request-coroutine binary-input-port)])
                 (let*-values ([(closure0 method) (get-values-from-coroutine closure 'method)]
                               [(closure1 target-string) (get-values-from-coroutine closure0 'uri)])
@@ -206,49 +278,84 @@
                          [path (assq-ref env 'path)]
                          [headers (assq-ref env 'headers)]
                          [protocol (assq-ref env 'protocol)]
-                         [close? (connection-close? headers protocol)])
-                    (if (and handler 
+                         [close? (or (>= request-count 100)
+                                     (connection-close? headers protocol))])
+                    (if (and handler
                              (handler env binary-output-port))
                         (begin
                           (log-access log-port method path status:ok 0)
                           (flush-output-port binary-output-port)
-                          (if (not close?) (loop)))
+                          (if (not close?) (loop (+ request-count 1))))
                         (if (not (safe-path? static-path path))
                             (begin
                               (write-response binary-output-port status:forbidden '() '() #t (not close?))
                               (log-access log-port method path status:forbidden 0)
                               (flush-output-port binary-output-port)
-                              (if (not close?) (loop)))
+                              (if (not close?) (loop (+ request-count 1))))
                             (let ([local (string-append static-path path)])
                               (let ([fip (guard (ex [#t #f])
                                            (open-file-input-port local))])
-                                (let ([actual-fip 
+                                (let ([actual-fip
                                        (if (not fip)
                                            (guard (ex [#t #f])
                                              (open-file-input-port (string-append local "/index.html")))
                                            fip)]
-                                      [actual-path 
+                                      [actual-path
                                        (if (not fip)
                                            (string-append path "/index.html")
                                            path)])
                                   (if (not actual-fip)
-                                      (if (file-exists? local)
-                                          (begin
-                                            (write-response binary-output-port status:forbidden '() '() #t (not close?))
-                                            (log-access log-port method path status:forbidden 0))
-                                          (begin
-                                            (write-response binary-output-port status:not-found '() '() #t (not close?))
-                                            (log-access log-port method path status:not-found 0)))
+                                      (begin
+                                        (if (file-exists? local)
+                                            (begin
+                                              (write-response binary-output-port status:forbidden '() '() #t (not close?))
+                                              (log-access log-port method path status:forbidden 0))
+                                            (begin
+                                              (write-response binary-output-port status:not-found '() '() #t (not close?))
+                                              (log-access log-port method path status:not-found 0)))
                                       (let ([size (file-length actual-fip)]
-                                            [content-type (guess-mime-type actual-path)])
-                                        (let ([bv (make-bytevector size)])
-                                          (get-bytevector-n! actual-fip bv 0 size)
-                                          (write-response binary-output-port status:ok 
-                                            `(("Content-Type" . ,content-type)) bv
-                                            (not (equal? method "HEAD"))
-                                            (not close?))
-                                          (close-input-port actual-fip)
-                                          (log-access log-port method path status:ok size))))
+                                            [content-type (guess-mime-type actual-path)]
+                                            [range (assoc-ref headers "range:")])
+                                        (if range
+                                            (let ([range-pair (parse-range-header range size)])
+                                              (if range-pair
+                                                  (let ([start (car range-pair)]
+                                                        [end (cdr range-pair)]
+                                                        [partial-size (+ (- end start) 1)])
+                                                    (set-port-position! actual-fip start)
+                                                    (guard (ex [#t (begin (close-input-port actual-fip) (raise ex))])
+                                                      (write-response binary-output-port status:partial-content
+                                                        `(("Content-Type" . ,content-type)
+                                                          ("Content-Range" . ,(string-append "bytes " (number->string start) "-" (number->string end) "/" (number->string size))))
+                                                        (cons actual-fip partial-size)
+                                                        (not (equal? method "HEAD"))
+                                                        (not close?)))
+                                                    (close-input-port actual-fip)
+                                                    (log-access log-port method path status:partial-content partial-size))
+                                                  (begin
+                                                    (close-input-port actual-fip)
+                                                    (write-response binary-output-port status:range-not-satisfiable '() '() #t #f)
+                                                    (log-access log-port method path status:range-not-satisfiable 0))))
+                                            (if (compressible? content-type size (assoc-ref headers "accept-encoding:"))
+                                                (let ([bv (make-bytevector size)])
+                                                  (get-bytevector-n! actual-fip bv 0 size)
+                                                  (close-input-port actual-fip)
+                                                  (let ([compressed (gzip-compress bv)])
+                                                    (write-response binary-output-port status:ok
+                                                      `(("Content-Type" . ,content-type)
+                                                        ("Content-Encoding" . "gzip")) compressed
+                                                      (not (equal? method "HEAD"))
+                                                      (not close?))
+                                                    (log-access log-port method path status:ok (bytevector-length compressed))))
+                                                (begin
+                                                  (guard (ex [#t (begin (close-input-port actual-fip) (raise ex))])
+                                                    (write-response binary-output-port status:ok
+                                                      `(("Content-Type" . ,content-type)) (cons actual-fip size)
+                                                      (not (equal? method "HEAD"))
+                                                      (not close?)))
+                                                  (close-input-port actual-fip)
+                                                  (log-access log-port method path status:ok size))))))
                                   (flush-output-port binary-output-port)
-                                  (if (not close?) (loop))))))))))))))))))
+                                  (if (not close?) (loop (+ request-count 1))))))))))))))))))
 
+))

@@ -34,27 +34,5 @@
     [(client-instance) (client-receive client-instance buff-size 0)]
     [(client-instance buff-size flag) (socket-recv (client-socket client-instance) buff-size flag)]))
 
-(define (do-log message client-instance)
-  (if (not (null? (client-log-port client-instance)))
-    (begin 
-      (put-string (client-log-port client-instance) message)
-      (put-string (client-log-port client-instance) "\n")
-      (flush-output-port (client-log-port client-instance)))))
 
-(define (do-log-timestamp client-instance)
-  (let* ([date (current-date)]
-      [current-date-string 
-        (fold-left 
-          (lambda (h t) (string-append h " " t )) 
-          (number->string (date-year date))
-          (map 
-            number->string 
-            (map 
-              (lambda (f) (f date))
-              (list date-month date-day date-hour date-minute date-second date-nanosecond))))])
-    (if (not (null? (client-log-port client-instance)))
-      (begin 
-        (put-string (client-log-port client-instance) current-date-string)
-        (put-string (client-log-port client-instance) "\n")
-        (flush-output-port (client-log-port client-instance))))))
 )

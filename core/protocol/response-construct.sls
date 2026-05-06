@@ -1,6 +1,7 @@
 (library (http-pixiu core protocol response-construct)
   (export 
     write-response
+    write-chunked-response
     write-json-response
     write-text-response
     write-html-response)
@@ -127,6 +128,53 @@
      (write-response out status-id 
        (cons (cons "Content-Type" "text/plain") alist)
        body #t keep-alive?)]))
+
+(define write-chunked-response
+  (case-lambda
+    ((binary-output-port status-id alist body)
+     (write-chunked-response binary-output-port status-id alist body #t #f))
+    ((binary-output-port status-id alist body send-body?)
+     (write-chunked-response binary-output-port status-id alist body send-body? #f))
+    ((binary-output-port status-id alist body send-body? keep-alive?)
+     (put-bytevector binary-output-port (string->bytevector "HTTP/1.1 " (current-transcoder)))
+     (put-bytevector binary-output-port (string->bytevector (number->string status-id) (current-transcoder)))
+     (put-bytevector binary-output-port (string->bytevector " " (current-transcoder)))
+     (put-bytevector binary-output-port (string->bytevector (status->reason-phrase status-id) (current-transcoder)))
+     (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder)))
+     (put-bytevector binary-output-port (string->bytevector "Server: http-pixiu\r\n" (current-transcoder)))
+     (put-bytevector binary-output-port (string->bytevector "Date: " (current-transcoder)))
+     (put-bytevector binary-output-port (string->bytevector (date->string (current-date)) (current-transcoder)))
+     (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder)))
+     (for-each
+       (lambda (p)
+         (put-bytevector binary-output-port (string->bytevector (car p) (current-transcoder)))
+         (put-bytevector binary-output-port (string->bytevector ": " (current-transcoder)))
+         (put-bytevector binary-output-port (string->bytevector (cdr p) (current-transcoder)))
+         (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder))))
+       alist)
+     (put-bytevector binary-output-port
+       (string->bytevector
+         (if keep-alive? "Connection: keep-alive\r\n" "Connection: close\r\n")
+         (current-transcoder)))
+     (put-bytevector binary-output-port (string->bytevector "Transfer-Encoding: chunked\r\n" (current-transcoder)))
+     (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder)))
+     (when send-body?
+       (if (and (pair? body) (input-port? (car body)))
+           (let ((port (car body)) (buff (make-bytevector 65536)))
+             (let loop ()
+               (let ((n (get-bytevector-n! port buff 0 65536)))
+                 (if (and n (not (eof-object? n)) (> n 0))
+                     (begin
+                       (put-bytevector binary-output-port (string->bytevector (string-append (number->string n 16) "\r\n") (current-transcoder)))
+                       (put-bytevector binary-output-port buff 0 n)
+                       (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder)))
+                       (loop))
+                     (void)))))
+           (let ((bv (if (string? body) (string->utf8 body) body)))
+             (put-bytevector binary-output-port (string->bytevector (string-append (number->string (bytevector-length bv) 16) "\r\n") (current-transcoder)))
+             (put-bytevector binary-output-port bv 0 (bytevector-length bv))
+             (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder))))))
+     (put-bytevector binary-output-port (string->bytevector "0\r\n\r\n" (current-transcoder))))))
 
 (define write-html-response
   (case-lambda

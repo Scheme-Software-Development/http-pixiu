@@ -11,17 +11,19 @@
 
     (http-pixiu core protocol request-parse))
 
-(define-record-type request-queue 
-  (fields 
+(define-record-type request-queue
+  (fields
     (immutable mutex)
     (immutable condition)
     (immutable queue)
     (mutable tickal-task-list)
-    (mutable shutdown?))
+    (mutable shutdown?)
+    (immutable max-size)
+    (mutable current-size))
   (protocol
     (lambda (new)
-      (lambda ()
-        (new (make-mutex) (make-condition) (make-queue) '() #f)))))
+      (lambda (max-size)
+        (new (make-mutex) (make-condition) (make-queue) '() #f max-size 0)))))
 
 (define-record-type tickal-task 
   (fields 
@@ -77,7 +79,9 @@
         (begin
           (condition-wait (request-queue-condition queue) (request-queue-mutex queue))
           (request-queue-pop queue)))
-      (tickal-task-job (dequeue! (request-queue-queue queue))))))
+      (begin
+        (request-queue-current-size-set! queue (- (request-queue-current-size queue) 1))
+        (tickal-task-job (dequeue! (request-queue-queue queue)))))))
 
 (define (request-queue-shutdown queue)
   (with-mutex (request-queue-mutex queue)
@@ -92,6 +96,12 @@
 
 (define (request-queue-push queue request-thunk expire-duration ticks)
   (with-mutex (request-queue-mutex queue)
-    (make-tickal-task request-thunk queue expire-duration ticks))
+    (if (and (request-queue-max-size queue)
+             (>= (request-queue-current-size queue) (request-queue-max-size queue)))
+        #f
+        (begin
+          (make-tickal-task request-thunk queue expire-duration ticks)
+          (request-queue-current-size-set! queue (+ (request-queue-current-size queue) 1))
+          #t)))
   (condition-broadcast (request-queue-condition queue)))
 )
