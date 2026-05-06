@@ -17,6 +17,8 @@
 
 | Version | Notes |
 |---------|-------|
+| 1.0.5 | Performance & security hardening: O(n²) → O(1) response headers, constant bytevector caching, SO_SNDTIMEO, duplicate header defense, null-byte path protection, error-page cache, ETag cache, MIME hashtable, Accept-Encoding cache, read-to-colon |
+| 1.0.4 | Production features: ETag/304, rate limiting, CORS, error pages, health check, request tracing, gzip, ranges, chunked encoding, Nginx TLS docs |
 | 1.0.3 | Add feature: yield among requests (tickal task queue with Chez engines) |
 | 1.0.2 | Fix bug: `\r\n` compatibility |
 | 1.0.1 | Fix bug: get body with coroutine |
@@ -52,9 +54,21 @@ core/protocol/
 core/protocol/
   request-queue.sls     ; make-request-queue, request-queue-pop/push, tickal-task
 core/protocol/
-  status.sls            ; HTTP status code constants (200, 404, 408, 500, etc.)
+  status.sls            ; HTTP status code constants (200, 404, 408, 429, 500, etc.)
 core/protocol/
   method.sls            ; HTTP method predicates/symbols (GET, POST, PUT, DELETE)
+core/protocol/
+  cors.sls              ; CORS preflight response and header injection
+core/protocol/
+  error-pages.sls       ; Custom error page loader and responder
+core/protocol/
+  logger.sls            ; Structured request/error logging with mutex
+core/protocol/
+  ratelimit.sls         ; Token-bucket rate limiter with per-key tracking
+core/protocol/
+  session.sls           ; Cookie/session store with TTL and mutex
+core/
+  config.sls            ; Default configuration alist and file loader
 core/util/
   io.sls                ; read-lines, read-line, read-to-CRNL, write-lines, write-string
 core/util/

@@ -102,6 +102,6 @@
         (begin
           (make-tickal-task request-thunk queue expire-duration ticks)
           (request-queue-current-size-set! queue (+ (request-queue-current-size queue) 1))
-          #t)))
-  (condition-broadcast (request-queue-condition queue)))
+          (condition-broadcast (request-queue-condition queue))
+          #t))))
 )

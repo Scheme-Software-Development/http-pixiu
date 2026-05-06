@@ -57,6 +57,15 @@
                 (loop-end (- j 1))
                 (substring s i j)))))))
 
+(define (string-contains? s substr)
+  (let ([len (string-length s)]
+        [sub-len (string-length substr)])
+    (let loop ([i 0])
+      (cond
+        [(> (+ i sub-len) len) #f]
+        [(equal? (substring s i (+ i sub-len)) substr) #t]
+        [else (loop (+ i 1))]))))
+
 (define (parse-range-header range-value file-size)
   (let ([s (string-trim-both range-value)])
     (if (and (>= (string-length s) 6)
@@ -254,6 +263,78 @@
                             (newline)
                             (sleep (make-time 'time-duration 50000000 0))
                             (loop)))))))))]))
+
+(define (serve-static-file binary-output-port method path headers static-path close? log-port)
+  (if (not (safe-path? static-path path))
+      (begin
+        (write-response binary-output-port status:forbidden '() '() #t (not close?))
+        (log-access log-port method path status:forbidden 0))
+      (let ([local (string-append static-path path)])
+        (let ([fip (guard (ex [#t #f])
+                     (open-file-input-port local))])
+          (let ([actual-fip
+                 (if (not fip)
+                     (guard (ex [#t #f])
+                       (open-file-input-port (string-append local "/index.html")))
+                     fip)]
+                [actual-path
+                 (if (not fip)
+                     (string-append path "/index.html")
+                     path)])
+            (if (not actual-fip)
+                (begin
+                  (if (file-exists? local)
+                      (begin
+                        (write-response binary-output-port status:forbidden '() '() #t (not close?))
+                        (log-access log-port method path status:forbidden 0))
+                      (begin
+                        (write-response binary-output-port status:not-found '() '() #t (not close?))
+                        (log-access log-port method path status:not-found 0)))
+                  (flush-output-port binary-output-port)
+                  (void))
+                (let ([size (file-length actual-fip)]
+                      [content-type (guess-mime-type actual-path)]
+                      [range (assoc-ref headers "range:")])
+                  (if range
+                      (let ([range-pair (parse-range-header range size)])
+                        (if range-pair
+                            (let* ([start (car range-pair)]
+                                   [end (cdr range-pair)]
+                                   [partial-size (+ (- end start) 1)])
+                              (set-port-position! actual-fip start)
+                              (guard (ex [#t (begin (close-input-port actual-fip) (raise ex))])
+                                (write-response binary-output-port status:partial-content
+                                  `(("Content-Type" . ,content-type)
+                                    ("Content-Range" . ,(string-append "bytes " (number->string start) "-" (number->string end) "/" (number->string size))))
+                                  (cons actual-fip partial-size)
+                                  (not (equal? method "HEAD"))
+                                  (not close?)))
+                              (close-input-port actual-fip)
+                              (log-access log-port method path status:partial-content partial-size))
+                            (begin
+                              (close-input-port actual-fip)
+                              (write-response binary-output-port status:range-not-satisfiable '() '() #t #f)
+                              (log-access log-port method path status:range-not-satisfiable 0))))
+                      (if (compressible? content-type size (assoc-ref headers "accept-encoding:"))
+                          (let ([bv (make-bytevector size)])
+                            (get-bytevector-n! actual-fip bv 0 size)
+                            (close-input-port actual-fip)
+                            (let ([compressed (gzip-compress bv)])
+                              (write-response binary-output-port status:ok
+                                `(("Content-Type" . ,content-type)
+                                  ("Content-Encoding" . "gzip")) compressed
+                                (not (equal? method "HEAD"))
+                                (not close?))
+                              (log-access log-port method path status:ok (bytevector-length compressed))))
+                          (begin
+                            (guard (ex [#t (begin (close-input-port actual-fip) (raise ex))])
+                              (write-response binary-output-port status:ok
+                                `(("Content-Type" . ,content-type)) (cons actual-fip size)
+                                (not (equal? method "HEAD"))
+                                (not close?)))
+                            (close-input-port actual-fip)
+                            (log-access log-port method path status:ok size)))))))))))
+
 (define (init-lifecycle socket handler log-port static-path)
   (lambda ()
     (call-with-socket socket
@@ -282,80 +363,10 @@
                                      (connection-close? headers protocol))])
                     (if (and handler
                              (handler env binary-output-port))
-                        (begin
-                          (log-access log-port method path status:ok 0)
-                          (flush-output-port binary-output-port)
-                          (if (not close?) (loop (+ request-count 1))))
-                        (if (not (safe-path? static-path path))
-                            (begin
-                              (write-response binary-output-port status:forbidden '() '() #t (not close?))
-                              (log-access log-port method path status:forbidden 0)
-                              (flush-output-port binary-output-port)
-                              (if (not close?) (loop (+ request-count 1))))
-                            (let ([local (string-append static-path path)])
-                              (let ([fip (guard (ex [#t #f])
-                                           (open-file-input-port local))])
-                                (let ([actual-fip
-                                       (if (not fip)
-                                           (guard (ex [#t #f])
-                                             (open-file-input-port (string-append local "/index.html")))
-                                           fip)]
-                                      [actual-path
-                                       (if (not fip)
-                                           (string-append path "/index.html")
-                                           path)])
-                                  (if (not actual-fip)
-                                      (begin
-                                        (if (file-exists? local)
-                                            (begin
-                                              (write-response binary-output-port status:forbidden '() '() #t (not close?))
-                                              (log-access log-port method path status:forbidden 0))
-                                            (begin
-                                              (write-response binary-output-port status:not-found '() '() #t (not close?))
-                                              (log-access log-port method path status:not-found 0)))
-                                      (let ([size (file-length actual-fip)]
-                                            [content-type (guess-mime-type actual-path)]
-                                            [range (assoc-ref headers "range:")])
-                                        (if range
-                                            (let ([range-pair (parse-range-header range size)])
-                                              (if range-pair
-                                                  (let ([start (car range-pair)]
-                                                        [end (cdr range-pair)]
-                                                        [partial-size (+ (- end start) 1)])
-                                                    (set-port-position! actual-fip start)
-                                                    (guard (ex [#t (begin (close-input-port actual-fip) (raise ex))])
-                                                      (write-response binary-output-port status:partial-content
-                                                        `(("Content-Type" . ,content-type)
-                                                          ("Content-Range" . ,(string-append "bytes " (number->string start) "-" (number->string end) "/" (number->string size))))
-                                                        (cons actual-fip partial-size)
-                                                        (not (equal? method "HEAD"))
-                                                        (not close?)))
-                                                    (close-input-port actual-fip)
-                                                    (log-access log-port method path status:partial-content partial-size))
-                                                  (begin
-                                                    (close-input-port actual-fip)
-                                                    (write-response binary-output-port status:range-not-satisfiable '() '() #t #f)
-                                                    (log-access log-port method path status:range-not-satisfiable 0))))
-                                            (if (compressible? content-type size (assoc-ref headers "accept-encoding:"))
-                                                (let ([bv (make-bytevector size)])
-                                                  (get-bytevector-n! actual-fip bv 0 size)
-                                                  (close-input-port actual-fip)
-                                                  (let ([compressed (gzip-compress bv)])
-                                                    (write-response binary-output-port status:ok
-                                                      `(("Content-Type" . ,content-type)
-                                                        ("Content-Encoding" . "gzip")) compressed
-                                                      (not (equal? method "HEAD"))
-                                                      (not close?))
-                                                    (log-access log-port method path status:ok (bytevector-length compressed))))
-                                                (begin
-                                                  (guard (ex [#t (begin (close-input-port actual-fip) (raise ex))])
-                                                    (write-response binary-output-port status:ok
-                                                      `(("Content-Type" . ,content-type)) (cons actual-fip size)
-                                                      (not (equal? method "HEAD"))
-                                                      (not close?)))
-                                                  (close-input-port actual-fip)
-                                                  (log-access log-port method path status:ok size))))))
-                                  (flush-output-port binary-output-port)
-                                  (if (not close?) (loop (+ request-count 1))))))))))))))))))
+                        (log-access log-port method path status:ok 0)
+                        (serve-static-file binary-output-port method path headers static-path close? log-port))
+                    (flush-output-port binary-output-port)
+                    (if (not close?) (loop (+ request-count 1)))))))))))))
 
-))
+
+)

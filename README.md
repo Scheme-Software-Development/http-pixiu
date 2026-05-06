@@ -15,6 +15,15 @@ A lightweight continuation-based HTTP server written in Chez Scheme (R6RS).
 - **Custom handler** — Programmable request handlers via `start-server`.
 - **Tickal task queue** — Request scheduling with Chez Scheme engines and configurable timeout.
 - **Thread pool** — Fixed-size worker thread pool for concurrent request handling.
+- **ETag / 304 Not Modified** — Static files emit ETags; conditional requests return `304` with no body.
+- **Rate limiting** — Per-server token-bucket rate limiter (default: 1000 req/min); returns `429 Too Many Requests` when exceeded.
+- **CORS preflight** — `OPTIONS` requests receive `204 No Content` with permissive CORS headers.
+- **Custom error pages** — Looks for `<static-path>/error-{code}.html`; falls back to minimal HTML if absent.
+- **Health check endpoint** — `GET /health` returns `{"status":"ok"}`.
+- **Request tracing** — Every response includes `X-Request-ID`.
+- **Gzip compression** — Text responses ≤1 MiB are automatically gzip-compressed when client accepts it.
+- **HTTP Range requests** — Supports `bytes=start-end` for `206 Partial Content`.
+- **Chunked Transfer Encoding** — Request parser handles `Transfer-Encoding: chunked`.
 
 ## Install
 
@@ -150,6 +159,39 @@ Runs all `.sps` test files under `tests/`.
 | 1.0.2 | Fix bug: `\r\n` compatibility |
 | 1.0.1 | Fix bug: get body with coroutine |
 | 1.0.0 | Initial release — static server only |
+
+## TLS with Nginx Reverse Proxy
+
+http-pixiu does not implement TLS natively. For production HTTPS, place Nginx in front as a reverse proxy:
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    location / {
+        proxy_pass         http://127.0.0.1:5000;
+        proxy_http_version 1.1;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+}
+
+server {
+    listen 80;
+    server_name example.com;
+    return 301 https://$server_name$request_uri;
+}
+```
+
+This preserves Keep-Alive, passes the original client IP via `X-Real-IP`, and terminates TLS before traffic reaches http-pixiu.
 
 ## License
 
