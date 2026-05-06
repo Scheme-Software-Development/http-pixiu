@@ -4,7 +4,7 @@
 (let ([args (command-line-arguments)])
   (if (null? args)
       (display "Usage: scheme --script run.ss <port> [thread-num] [expire-ms] [ticks]\n")
-      (let ([port (string->number (car args))]
+      (let ([port (car args)]
             [rest (map string->number (cdr args))])
         (case (length rest)
           [(0) (start-server port)]

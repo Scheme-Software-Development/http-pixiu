@@ -32,9 +32,19 @@
 (define (start-server-process)
   (let ([script "/tmp/http-pixiu-test-server-extended.sps"])
     (guard (ex [#t (void)]) (delete-file script))
+    (guard (ex [#t (void)]) (delete-file pid-file))
+    ;; Clean up any leftover processes from previous runs
+    (system (string-append "pkill -9 -f \"scheme --script " script "\" 2>/dev/null >/dev/null 2>&1"))
+    (sleep (make-time 'time-duration 0 1))
     (call-with-output-file script
       (lambda (p)
         (put-string p "(import (chezscheme) (http-pixiu))\n")
+        (put-string p "(guard (ex [#t (void)]) (delete-file \"")
+        (put-string p pid-file)
+        (put-string p "\"))\n")
+        (put-string p "(call-with-output-file \"")
+        (put-string p pid-file)
+        (put-string p "\"\n  (lambda (p) (display (get-process-id) p) (newline p)))\n")
         (put-string p "(start-server \"")
         (put-string p test-port)
         (put-string p "\" (current-output-port) 1 1000 100000 #f \"")
@@ -43,14 +53,26 @@
     (system 
       (string-append 
         "cd " (current-directory) " && source .akku/bin/activate && scheme --script " script 
-        " > /dev/null 2>&1 & echo $! > " pid-file))
-    (sleep (make-time 'time-duration 0 1))))
+        " > /dev/null 2>&1 & exit 0"))
+    (sleep (make-time 'time-duration 0 2))))
 
 (define (stop-server-process)
   (guard (ex [#t (void)])
-    (let ([pid (call-with-input-file pid-file get-string-all)])
-      (system (string-append "kill " pid " 2>/dev/null; sleep 1; kill -9 " pid " 2>/dev/null"))
-      (delete-file pid-file))))
+    (let ([script "/tmp/http-pixiu-test-server-extended.sps"])
+      ;; Kill both the scheme process and its parent shell
+      (system (string-append "pkill -9 -f \"http-pixiu-test-server-extended\" 2>/dev/null >/dev/null 2>&1"))
+      (guard (ex [#t (void)]) (delete-file pid-file)))))
+
+(define (wait-for-server)
+  (let loop ([retries 30])
+    (if (zero? retries)
+        (error 'wait-for-server "Server did not start in time"))
+    (let ([code (curl-get "/index.html")])
+      (if (equal? code "000")
+          (begin
+            (sleep (make-time 'time-duration 100000000 0))
+            (loop (- retries 1)))
+          code))))
 
 (define (curl-get path . headers)
   (let ([header-args (apply string-append 
@@ -66,6 +88,7 @@
   setup-files
   (lambda ()
     (start-server-process)
+    (wait-for-server)
     (test-equal "GET existing file returns 200" "200" (curl-get "/index.html"))
     (test-equal "GET non-existing file returns 404" "404" (curl-get "/notfound.txt"))
     (test-equal "Directory with index returns 200" "200" (curl-get "/"))
