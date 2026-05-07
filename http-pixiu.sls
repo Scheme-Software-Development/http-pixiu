@@ -24,6 +24,7 @@
     (http-pixiu core util io)
     (http-pixiu core util association)
     (http-pixiu core mime)
+    (http-pixiu core zlib)
 
     (chibi uri)
     (ufo-socket)
@@ -113,6 +114,15 @@
         (consume-coroutine (lambda () (resume val)))
         val)))
 
+(define (generate-request-id)
+  (let ([t (current-time)])
+    (string-append
+      (number->string (time-second t) 16)
+      "-"
+      (number->string (mod (time-nanosecond t) (expt 2 31)) 16)
+      "-"
+      (number->string (random (expt 2 16)) 16))))
+
 (define (build-request-env closure method uri-str)
   (let ([full-result (consume-coroutine closure)])
     (let ([protocol (assq-ref full-result 'protocol)]
@@ -130,7 +140,8 @@
             (query . ,(guard (ex [#t #f]) (uri-query uri)))
             (protocol . ,protocol)
             (headers . ,headers)
-            (body . ,(if body-pair (cdr body-pair) #f))))))))
+            (body . ,(if body-pair (cdr body-pair) #f))
+            (request-id . ,(generate-request-id)))))))))
 
 ; default request timeout in milliseconds
 (define default-expire-duration 1000)
@@ -267,8 +278,12 @@
     (let ([method (env-method env)]
           [path (env-path env)]
           [headers (env-headers env)])
-      (if (not (safe-path? static-path path))
-          (make-response status:forbidden '() '())
+      (if (equal? path "/health")
+          (make-response status:ok
+            '(("Content-Type" . "application/json"))
+            (string->utf8 "{\"status\":\"ok\"}"))
+          (if (not (safe-path? static-path path))
+              (make-response status:forbidden '() '())
           (let ([local (string-append static-path path)])
             (let ([fip (guard (ex [#t #f])
                          (open-file-input-port local))])
@@ -315,7 +330,7 @@
                                       compressed))))
                               (make-response status:ok
                                 `(("Content-Type" . ,content-type))
-                                (cons actual-fip size))))))))))))
+                                (cons actual-fip size)))))))))))))))
 
 (define (init-lifecycle socket handler log-port static-path config)
   (let ([default-handler (serve-static-file static-path)]
@@ -355,28 +370,30 @@
                                        (let ([h4 ((logging-middleware log-port) h3)])
                                          ((error-page-middleware static-path) h4)))))
                                  (or handler default-handler))])
-                        (let ([resp (final-handler env)])
-                          (let ([status (response-status resp)]
-                                [resp-headers (response-headers resp)]
-                                [body (response-body resp)])
-                            ;; 100 Continue
-                            (when (equal? (assoc-ref headers "expect:") "100-continue")
-                              (write-response binary-output-port status:continue '() '() #f (not close?))
-                              (flush-output-port binary-output-port))
-                            ;; Chunked vs Content-Length
-                            (if (and (pair? body) (input-port? (car body)) (not (cdr body)))
-                                (write-chunked-response binary-output-port (or status status:not-found) resp-headers body
-                                                        (not (equal? method "HEAD"))
-                                                        (not close?))
-                                (write-response binary-output-port (or status status:not-found) resp-headers body
-                                                (not (equal? method "HEAD"))
-                                                (not close?)))
-                            (when (and (pair? body) (input-port? (car body)))
-                              (close-input-port (car body)))
-                            (if (not config)
-                                (log-request log-port method path (or status status:not-found) (body-size body)))
-                            (flush-output-port binary-output-port)
-                            (if (not close?) (loop (+ request-count 1)))))))))))))))))
+                        (let ([request-id (assq-ref env 'request-id)])
+                          (let ([resp (final-handler env)])
+                            (let ([status (response-status resp)]
+                                  [resp-headers (cons (cons "X-Request-ID" (or request-id "-"))
+                                                      (response-headers resp))]
+                                  [body (response-body resp)])
+                              ;; 100 Continue
+                              (when (equal? (assoc-ref headers "expect:") "100-continue")
+                                (write-response binary-output-port status:continue '() '() #f (not close?))
+                                (flush-output-port binary-output-port))
+                              ;; Chunked vs Content-Length
+                              (if (and (pair? body) (input-port? (car body)) (not (cdr body)))
+                                  (write-chunked-response binary-output-port (or status status:not-found) resp-headers body
+                                                          (not (equal? method "HEAD"))
+                                                          (not close?))
+                                  (write-response binary-output-port (or status status:not-found) resp-headers body
+                                                  (not (equal? method "HEAD"))
+                                                  (not close?)))
+                              (when (and (pair? body) (input-port? (car body)))
+                                (close-input-port (car body)))
+                              (if (not config)
+                                  (log-request log-port method path (or status status:not-found) (body-size body)))
+                              (flush-output-port binary-output-port)
+                              (if (not close?) (loop (+ request-count 1)))))))))))))))))
 
 
 )
