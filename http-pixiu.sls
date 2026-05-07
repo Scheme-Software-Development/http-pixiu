@@ -25,6 +25,7 @@
     (http-pixiu core util io)
     (http-pixiu core util association)
     (http-pixiu core mime)
+    (http-pixiu core cache)
     (http-pixiu core zlib)
 
     (chibi uri)
@@ -197,9 +198,9 @@
 
 (define start-server
   (case-lambda 
-    [(port) (start-server port (current-output-port) 1 default-expire-duration default-ticks #f "./static" (make-config))]
-    [(port thread-num) (start-server port (current-output-port) thread-num default-expire-duration default-ticks #f "./static" (make-config))]
-    [(port thread-num expire-duration ticks) (start-server port (current-output-port) thread-num expire-duration ticks #f "./static" (make-config))]
+    [(port) (start-server port (make-logger "access" 'clf) 1 default-expire-duration default-ticks #f "./static" (make-config))]
+    [(port thread-num) (start-server port (make-logger "access" 'clf) thread-num default-expire-duration default-ticks #f "./static" (make-config))]
+    [(port thread-num expire-duration ticks) (start-server port (make-logger "access" 'clf) thread-num expire-duration ticks #f "./static" (make-config))]
     [(port log-port thread-num expire-duration ticks) (start-server port log-port thread-num expire-duration ticks #f "./static" (make-config))]
     [(port log-port thread-num expire-duration ticks handler)
      (start-server port log-port thread-num expire-duration ticks handler "./static" (make-config))]
@@ -263,6 +264,8 @@
                             (sleep (make-time 'time-duration 50000000 0))
                             (loop)))))))))]))
 
+(define file-cache-inst (make-file-cache))
+
 (define (serve-static-file static-path)
   (lambda (env)
     (let ([method (env-method env)]
@@ -278,12 +281,12 @@
             (let ([fip (guard (ex [#t #f])
                          (open-file-input-port local))])
               (let ([actual-fip
-                     (if (not fip)
+                     (if (or (not fip) (guard (ex [#t #f]) (file-directory? local)))
                          (guard (ex [#t #f])
                            (open-file-input-port (string-append local "/index.html")))
                          fip)]
                     [actual-path
-                     (if (not fip)
+                     (if (or (not fip) (guard (ex [#t #f]) (file-directory? local)))
                          (string-append path "/index.html")
                          path)])
                 (if (not actual-fip)
@@ -291,10 +294,19 @@
                         (make-response status:forbidden '() '())
                         (make-response status:not-found '() '()))
                     (let ([size (file-length actual-fip)]
+                          [mtime (guard (ex [#t 0]) (time-second (file-modification-time local)))]
                           [content-type (guess-mime-type actual-path)]
-                          [range (assoc-ref headers "range:")])
-                      (if range
-                          (let ([range-pair (parse-range-header range size)])
+                          [range (assoc-ref headers "range:")]
+                          [if-none-match (assoc-ref headers "if-none-match:")])
+                      (if (and if-none-match (equal? if-none-match (cache-generate-etag mtime size)))
+                          (begin
+                            (close-input-port actual-fip)
+                            (make-response status:not-modified
+                              `(("Content-Type" . ,content-type)
+                                ("ETag" . ,(cache-generate-etag mtime size)))
+                              '()))
+                          (if range
+                              (let ([range-pair (parse-range-header range size)])
                             (if range-pair
                                 (let* ([start (car range-pair)]
                                        [end (cdr range-pair)]
@@ -318,9 +330,26 @@
                                       `(("Content-Type" . ,content-type)
                                         ("Content-Encoding" . "gzip"))
                                       compressed))))
-                              (make-response status:ok
-                                `(("Content-Type" . ,content-type))
-                                (cons actual-fip size))))))))))))))
+                              (let ([cached (cache-lookup file-cache-inst actual-path headers)])
+                                (if cached
+                                    (begin
+                                      (close-input-port actual-fip)
+                                      (make-response status:ok
+                                        `(("Content-Type" . ,content-type)
+                                          ("ETag" . ,(cache-etag cached)))
+                                        (cache-content cached)))
+                                    (if (<= size (* 256 1024))
+                                        (let ([bv (make-bytevector size)])
+                                          (get-bytevector-n! actual-fip bv 0 size)
+                                          (close-input-port actual-fip)
+                                          (cache-store! file-cache-inst actual-path bv mtime size)
+                                          (make-response status:ok
+                                            `(("Content-Type" . ,content-type)
+                                              ("ETag" . ,(cache-generate-etag mtime size)))
+                                            bv))
+                                        (make-response status:ok
+                                          `(("Content-Type" . ,content-type))
+                                          (cons actual-fip size))))))))))))))))))
 
 (define (init-lifecycle socket handler log-port static-path config)
   (let ([default-handler (serve-static-file static-path)]
@@ -328,22 +357,23 @@
     (lambda ()
       (call-with-socket socket
         (lambda (socket)
-          (socket-set-timeout! socket 30000)
           (let ([binary-input-port (socket-input-port socket)]
                 [binary-output-port (socket-output-port socket)])
             (let loop ([request-count 0])
+              (socket-set-timeout! socket 5000)
               (guard (c
                        [(number? c)
                         (write-response binary-output-port c '() '() #t #f)
-                        (log-request log-port "UNKNOWN" "/" c 0)
+                        (log-request log-port "UNKNOWN" "/" c 0 "HTTP/1.1")
                         (flush-output-port binary-output-port)]
                        [else
                         (write-response binary-output-port status:internal-server-error '() '() #t #f)
-                        (log-request log-port "UNKNOWN" "/" status:internal-server-error 0)
+                        (log-request log-port "UNKNOWN" "/" status:internal-server-error 0 "HTTP/1.1")
                         (flush-output-port binary-output-port)])
                 (let ([closure (parse-request-coroutine binary-input-port)])
                   (let*-values ([(closure0 method) (get-values-from-coroutine closure 'method)]
                                 [(closure1 target-string) (get-values-from-coroutine closure0 'uri)])
+                    (socket-set-timeout! socket 30000)
                     (let* ([env (build-request-env closure1 method target-string)]
                            [path (assq-ref env 'path)]
                            [headers (assq-ref env 'headers)]
@@ -381,7 +411,7 @@
                               (when (and (pair? body) (input-port? (car body)))
                                 (close-input-port (car body)))
                               (if (not config)
-                                  (log-request log-port method path (or status status:not-found) (body-size body)))
+                                  (log-request log-port method path (or status status:not-found) (body-size body) protocol (assq-ref env 'client-ip) (assoc-ref headers "user-agent:")))
                               (flush-output-port binary-output-port)
                               (if (not close?) (loop (+ request-count 1))))))))))))))))))
 

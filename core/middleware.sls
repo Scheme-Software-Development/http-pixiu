@@ -105,7 +105,10 @@
                 (env-method env)
                 (env-path env)
                 (response-status resp)
-                (response-size resp))
+                (response-size resp)
+                (env-protocol env)
+                (env-client-ip env)
+                (assoc-ref (env-headers env) "user-agent:"))
               resp))))))
 
   ;; ------------------------------------------------------------------
