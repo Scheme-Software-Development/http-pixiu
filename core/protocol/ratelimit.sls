@@ -11,7 +11,7 @@
           mutex))
 
 (define (make-rate-limiter window-seconds max-requests)
-  (make-rate-limiter (make-eq-hashtable) window-seconds max-requests (make-mutex)))
+  (make-rate-limiter (make-hashtable string-hash string=?) window-seconds max-requests (make-mutex)))
 
 (define (current-epoch)
   (floor (time-second (current-time))))
