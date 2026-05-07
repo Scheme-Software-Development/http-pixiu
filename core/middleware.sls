@@ -101,12 +101,11 @@
           (let ([resp (handler env)])
             (let ([elapsed (time-difference (current-time) start)])
               (log-request
+                log-port
                 (env-method env)
                 (env-path env)
                 (response-status resp)
-                (or (env-client-ip env) "-")
-                (or (assoc-ref (env-headers env) "user-agent:") "-")
-                log-port)
+                (response-size resp))
               resp))))))
 
   ;; ------------------------------------------------------------------

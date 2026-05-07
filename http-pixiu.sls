@@ -20,7 +20,8 @@
     (http-pixiu core protocol response-construct)
     (http-pixiu core protocol status)
     (http-pixiu core protocol logger)
-    (http-pixiu core protocol config)
+    (http-pixiu core protocol ratelimit)
+    (http-pixiu core config)
     (http-pixiu core util io)
     (http-pixiu core util association)
     (http-pixiu core mime)
@@ -141,7 +142,7 @@
             (protocol . ,protocol)
             (headers . ,headers)
             (body . ,(if body-pair (cdr body-pair) #f))
-            (request-id . ,(generate-request-id)))))))))
+            (request-id . ,(generate-request-id))))))))
 
 ; default request timeout in milliseconds
 (define default-expire-duration 1000)
@@ -188,20 +189,9 @@
                 (equal? (substring content-type 0 5) "text/"))
            (member content-type '("application/javascript" "application/json" "application/xml")))))
 
-(define stop-server
-  (case-lambda
-    [(server request-queue)
-     (stop-server server request-queue #f)]
-    [(server request-queue port)
-     (set! shutdown-flag #t)
-     (display "Graceful shutdown initiated...")
-     (newline)
-     (request-queue-shutdown request-queue)
-     (when port
-       (guard (ex [#t (void)])
-         (let ([dummy (make-client-socket "127.0.0.1" port)])
-           (socket-close dummy))))
-     (guard (ex [#t (void)]) (socket-close (server-socket server)))]))
+(define (stop-server server request-queue)
+  (set! shutdown-flag #t)
+  (request-queue-shutdown request-queue))
 
 (define *current-server-info* #f)
 
@@ -330,7 +320,7 @@
                                       compressed))))
                               (make-response status:ok
                                 `(("Content-Type" . ,content-type))
-                                (cons actual-fip size)))))))))))))))
+                                (cons actual-fip size))))))))))))))
 
 (define (init-lifecycle socket handler log-port static-path config)
   (let ([default-handler (serve-static-file static-path)]
@@ -393,7 +383,7 @@
                               (if (not config)
                                   (log-request log-port method path (or status status:not-found) (body-size body)))
                               (flush-output-port binary-output-port)
-                              (if (not close?) (loop (+ request-count 1)))))))))))))))))
+                              (if (not close?) (loop (+ request-count 1))))))))))))))))))
 
 
 )

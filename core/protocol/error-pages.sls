@@ -8,6 +8,33 @@
 (define *error-page-cache* (make-hashtable string-hash string=?))
 (define *error-page-cache-mutex* (make-mutex))
 
+(define (status->reason-phrase code)
+  (case code
+    [(100) "Continue"]
+    [(101) "Switching Protocols"]
+    [(200) "OK"]
+    [(201) "Created"]
+    [(202) "Accepted"]
+    [(204) "No Content"]
+    [(206) "Partial Content"]
+    [(301) "Moved Permanently"]
+    [(302) "Found"]
+    [(304) "Not Modified"]
+    [(307) "Temporary Redirect"]
+    [(400) "Bad Request"]
+    [(401) "Unauthorized"]
+    [(403) "Forbidden"]
+    [(404) "Not Found"]
+    [(405) "Method Not Allowed"]
+    [(408) "Request Timeout"]
+    [(416) "Range Not Satisfiable"]
+    [(429) "Too Many Requests"]
+    [(500) "Internal Server Error"]
+    [(501) "Not Implemented"]
+    [(502) "Bad Gateway"]
+    [(503) "Service Unavailable"]
+    [else "Unknown"]))
+
 (define (cache-key static-path status-code)
   (string-append static-path "#" (number->string status-code)))
 

@@ -38,6 +38,7 @@
     status:range-not-satisfiable
     status:expectation-failed
     status:upgrade-required
+    status:too-many-requests
 
     status:internal-server-error
     status:not-implemented
@@ -85,6 +86,7 @@
 (define status:range-not-satisfiable 416)
 (define status:expectation-failed 417)
 (define status:upgrade-required 426)
+(define status:too-many-requests 429)
 
 (define status:internal-server-error 500)
 (define status:not-implemented 501)

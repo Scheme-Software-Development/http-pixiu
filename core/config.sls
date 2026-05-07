@@ -31,11 +31,4 @@
       (let ([content (get-string-all port)])
         (close-input-port port)
         (read (open-string-input-port content))))))
-
-(define (get-string-all port)
-  (let ([out (open-output-string)])
-    (let loop ()
-      (let ([ch (get-char port)])
-        (if (eof-object? ch)
-            (get-output-string out)
-            (begin (put-char out ch) (loop))))))))
+)
