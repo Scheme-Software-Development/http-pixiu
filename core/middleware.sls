@@ -7,7 +7,8 @@
     ratelimit-middleware
     session-middleware
     logging-middleware
-    error-page-middleware)
+    error-page-middleware
+    security-headers-middleware)
 
   (import (chezscheme)
           (http-pixiu core handler)
@@ -125,5 +126,21 @@
                     (response-headers resp)
                     err-body))
                 resp))))))
+
+  ;; ------------------------------------------------------------------
+  ;; Security headers middleware
+  ;; ------------------------------------------------------------------
+  (define (security-headers-middleware handler)
+    (lambda (env)
+      (let ([resp (handler env)])
+        (make-response (response-status resp)
+          (append
+            '(("X-Content-Type-Options" . "nosniff")
+              ("X-Frame-Options" . "DENY")
+              ("Referrer-Policy" . "strict-origin-when-cross-origin")
+              ("Strict-Transport-Security" . "max-age=63072000")
+              ("Content-Security-Policy" . "default-src 'self'"))
+            (response-headers resp))
+          (response-body resp)))))
 
 )

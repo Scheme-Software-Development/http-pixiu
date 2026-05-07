@@ -27,6 +27,8 @@
     (http-pixiu core mime)
     (http-pixiu core cache)
     (http-pixiu core zlib)
+    (http-pixiu core connection-counter)
+    (http-pixiu core metrics)
 
     (chibi uri)
     (ufo-socket)
@@ -125,11 +127,20 @@
       "-"
       (number->string (random (expt 2 16)) 16))))
 
+(define max-header-count 100)
+(define max-header-key-length 8192)
+(define max-content-length (* 10 1024 1024)) ; 10 MiB
+
 (define (build-request-env closure method uri-str)
   (let ([full-result (consume-coroutine closure)])
     (let ([protocol (assq-ref full-result 'protocol)]
           [body-pair (assq 'body full-result)]
           [headers (filter (lambda (p) (string? (car p))) full-result)])
+      ;; Hard limits on headers
+      (when (> (length headers) max-header-count)
+        (raise status:bad-request))
+      (when (ormap (lambda (h) (> (string-length (car h)) max-header-key-length)) headers)
+        (raise status:bad-request))
       (let ([uri (string->path-uri 'http uri-str)])
         (let ([path (uri-path uri)])
           ; HTTP/1.1 requires Host header
@@ -211,6 +222,7 @@
       (let* ([thread-pool (init-thread-pool thread-num)]
              [max-queue-size (max (* thread-num 16) 64)]
              [request-queue (make-request-queue max-queue-size)]
+             [conn-counter (make-connection-counter 1024)]
              [server (make-server port log-port thread-pool)])
         (set! *current-server-info* (cons server request-queue))
         (register-signal-handler 2
@@ -244,8 +256,19 @@
               (let ([received-socket 
                      (guard (ex [#t #f]) (socket-accept (server-socket server)))])
                 (if received-socket
-                    (if (request-queue-push request-queue (init-lifecycle received-socket handler (server-log-port server) static-path config) expire-duration ticks)
-                        (loop)
+                    (if (connection-counter-acquire! conn-counter)
+                        (let ([job (init-lifecycle received-socket handler (server-log-port server) static-path config conn-counter)])
+                          (if (request-queue-push request-queue
+                                  (lambda () (dynamic-wind
+                                              (lambda () #f)
+                                              (lambda () (job))
+                                              (lambda () (connection-counter-release! conn-counter))))
+                                  expire-duration ticks)
+                              (loop)
+                              (begin
+                                (connection-counter-release! conn-counter)
+                                (guard (ex [#t (void)]) (socket-close received-socket))
+                                (loop))))
                         (begin
                           (guard (ex [#t (void)]) (socket-close received-socket))
                           (loop)))
@@ -265,6 +288,7 @@
                             (loop)))))))))]))
 
 (define file-cache-inst (make-file-cache))
+(define metrics-inst (metrics-new))
 
 (define (serve-static-file static-path)
   (lambda (env)
@@ -275,9 +299,13 @@
           (make-response status:ok
             '(("Content-Type" . "application/json"))
             (string->utf8 "{\"status\":\"ok\"}"))
-          (if (not (safe-path? static-path path))
-              (make-response status:forbidden '() '())
-          (let ([local (string-append static-path path)])
+          (if (equal? path "/metrics")
+              (make-response status:ok
+                '(("Content-Type" . "text/plain; version=0.0.4"))
+                (metrics-render metrics-inst))
+              (if (not (safe-path? static-path path))
+                  (make-response status:forbidden '() '())
+              (let ([local (string-append static-path path)])
             (let ([fip (guard (ex [#t #f])
                          (open-file-input-port local))])
               (let ([actual-fip
@@ -349,9 +377,9 @@
                                             bv))
                                         (make-response status:ok
                                           `(("Content-Type" . ,content-type))
-                                          (cons actual-fip size))))))))))))))))))
+                                          (cons actual-fip size)))))))))))))))))))
 
-(define (init-lifecycle socket handler log-port static-path config)
+(define (init-lifecycle socket handler log-port static-path config conn-counter)
   (let ([default-handler (serve-static-file static-path)]
         [rate-limiter (if config (make-rate-limiter (config-get config 'rate-limit-window) (config-get config 'rate-limit-max)) #f)])
     (lambda ()
@@ -380,6 +408,12 @@
                            [protocol (assq-ref env 'protocol)]
                            [close? (or (>= request-count 100)
                                        (connection-close? headers protocol))])
+                      ;; Enforce max Content-Length
+                      (let ([content-length-str (assoc-ref headers "content-length:")])
+                        (when content-length-str
+                          (let ([len (guard (ex [#t #f]) (string->number content-length-str))])
+                            (when (and len (> len max-content-length))
+                              (raise status:payload-too-large)))))
                       (let ([final-handler
                              (if config
                                  (let ([h (or handler default-handler)])
@@ -388,14 +422,21 @@
                                                    ((ratelimit-middleware rate-limiter) h2)
                                                    h2)])
                                        (let ([h4 ((logging-middleware log-port) h3)])
-                                         ((error-page-middleware static-path) h4)))))
-                                 (or handler default-handler))])
+                                         (let ([h5 (security-headers-middleware h4)])
+                                           ((error-page-middleware static-path) h5))))))
+                                 (security-headers-middleware (or handler default-handler)))])
                         (let ([request-id (assq-ref env 'request-id)])
-                          (let ([resp (final-handler env)])
+                          (let ([start-time (current-time)]
+                                [resp (final-handler env)])
                             (let ([status (response-status resp)]
                                   [resp-headers (cons (cons "X-Request-ID" (or request-id "-"))
                                                       (response-headers resp))]
                                   [body (response-body resp)])
+                              ;; Record metrics
+                              (let ([duration-ms (let ([dt (time-difference (current-time) start-time)])
+                                                   (+ (* (time-second dt) 1000)
+                                                      (div (time-nanosecond dt) 1000000)))])
+                                (metrics-increment-request! metrics-inst method (or status status:not-found) duration-ms))
                               ;; 100 Continue
                               (when (equal? (assoc-ref headers "expect:") "100-continue")
                                 (write-response binary-output-port status:continue '() '() #f (not close?))

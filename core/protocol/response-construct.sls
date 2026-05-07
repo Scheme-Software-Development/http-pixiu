@@ -10,7 +10,8 @@
     (http-pixiu core util date)
     (http-pixiu core util association)
     (http-pixiu core protocol status)
-    (http-pixiu core ffi sendfile))
+    (http-pixiu core ffi sendfile)
+    (http-pixiu core buffer-pool))
 
 (define (status->reason-phrase status-id)
   (case status-id
@@ -103,12 +104,12 @@
                          [out-fd (guard (ex [#t #f]) (port-file-descriptor binary-output-port))])
                      (if (and in-fd out-fd (sendfile-available?))
                          (sendfile-copy out-fd in-fd size)
-                         (let ([buff (make-bytevector 65536)])
+                         (let ([buff (acquire-64k-buffer)])
                            (let loop ()
                              (let ([n (get-bytevector-n! port buff 0 65536)])
                                (if (and n (not (eof-object? n)) (> n 0))
                                  (begin (put-bytevector binary-output-port buff 0 n) (loop))
-                                 (void))))))))
+                                 (begin (release-64k-buffer buff) (void)))))))))
                  (put-bytevector binary-output-port body-bytevector)))
            (begin
              (put-bytevector binary-output-port 
@@ -166,7 +167,7 @@
      (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder)))
      (when send-body?
        (if (and (pair? body) (input-port? (car body)))
-           (let ((port (car body)) (buff (make-bytevector 65536)))
+           (let ((port (car body)) (buff (acquire-64k-buffer)))
              (let loop ()
                (let ((n (get-bytevector-n! port buff 0 65536)))
                  (if (and n (not (eof-object? n)) (> n 0))
@@ -175,7 +176,7 @@
                        (put-bytevector binary-output-port buff 0 n)
                        (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder)))
                        (loop))
-                     (void)))))
+                     (begin (release-64k-buffer buff) (void))))))
            (let ((bv (if (string? body) (string->utf8 body) body)))
              (put-bytevector binary-output-port (string->bytevector (string-append (number->string (bytevector-length bv) 16) "\r\n") (current-transcoder)))
              (put-bytevector binary-output-port bv 0 (bytevector-length bv))
