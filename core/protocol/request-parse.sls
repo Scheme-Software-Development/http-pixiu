@@ -33,8 +33,10 @@
 
 (define parse-request-coroutine 
   (case-lambda 
-    [(input-binary-port) (parse-request-coroutine input-binary-port request-header-size request-body-size)]
-    [(input-binary-port current-header-size current-body-size)
+    [(input-binary-port) (parse-request-coroutine input-binary-port request-header-size request-body-size (* 1024 1024))]
+    [(input-binary-port current-header-size) (parse-request-coroutine input-binary-port current-header-size request-body-size (* 1024 1024))]
+    [(input-binary-port current-header-size current-body-size) (parse-request-coroutine input-binary-port current-header-size current-body-size (* 1024 1024))]
+    [(input-binary-port current-header-size current-body-size stream-threshold)
       (init-coroutine
         (lambda (yield)
           (let loop ([env '()]
@@ -73,6 +75,8 @@
                          (cond
                            [(or (not n) (not (integer? n)) (< n 0)) (raise status:bad-request)]
                            [(> n current-body-size) (raise status:bad-request)]
+                           [(> n stream-threshold)
+                            `(,@new-env (body . stream) (content-length . ,n))]
                            [else `(,@new-env (body . ,(get-bytevector-n input-binary-port n)))]))]))]
                 [else 
                   (if (>= header-count max-header-lines)

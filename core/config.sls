@@ -18,7 +18,8 @@
     (rate-limit-max . 100)
     (cors-allow-origin . "*")
     (session-timeout . 3600)
-    (idle-timeout-ms . 5000)))
+    (idle-timeout-ms . 5000)
+    (vhosts . ())))
 
 (define (config-get config key)
   (let ([pair (assoc key config)])

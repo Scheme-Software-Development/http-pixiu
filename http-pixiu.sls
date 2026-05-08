@@ -65,26 +65,67 @@
         [(equal? (substring s i (+ i sub-len)) substr) #t]
         [else (loop (+ i 1))]))))
 
+(define (parse-single-range part file-size)
+  (let ([s (string-trim-both part)])
+    (let find-dash ([i 0])
+      (cond
+        [(>= i (string-length s)) #f]
+        [(char=? (string-ref s i) #\-)
+         (let ([start-str (string-trim-both (substring s 0 i))]
+               [end-str (string-trim-both (substring s (+ i 1) (string-length s)))])
+           (let ([start (guard (ex [#t #f]) (string->number start-str))]
+                 [end (if (zero? (string-length end-str))
+                          (- file-size 1)
+                          (guard (ex [#t #f]) (string->number end-str)))])
+             (if (and start end (>= start 0) (<= start end) (< end file-size))
+                 (cons start end)
+                 #f)))]
+        [else (find-dash (+ i 1))]))))
+
 (define (parse-range-header range-value file-size)
   (let ([s (string-trim-both range-value)])
     (if (and (>= (string-length s) 6)
              (equal? (substring s 0 6) "bytes="))
         (let ([rest (substring s 6 (string-length s))])
-          (let find-dash ([i 0])
-            (cond
-              [(>= i (string-length rest)) #f]
-              [(char=? (string-ref rest i) #\-)
-               (let ([start-str (string-trim-both (substring rest 0 i))]
-                     [end-str (string-trim-both (substring rest (+ i 1) (string-length rest)))])
-                 (let ([start (guard (ex [#t #f]) (string->number start-str))]
-                       [end (if (zero? (string-length end-str))
-                                (- file-size 1)
-                                (guard (ex [#t #f]) (string->number end-str)))])
-                   (if (and start end (>= start 0) (<= start end) (< end file-size))
-                       (cons start end)
-                       #f)))]
-              [else (find-dash (+ i 1))])))
+          (let parse-parts ([start 0] [result '()])
+            (let find-comma ([i start])
+              (cond
+                [(>= i (string-length rest))
+                 (let ([range (parse-single-range (substring rest start i) file-size)])
+                   (let ([final (if range (cons range result) result)])
+                     (if (null? final) #f (reverse final))))]
+                [(char=? (string-ref rest i) #\,)
+                 (let ([range (parse-single-range (substring rest start i) file-size)])
+                   (parse-parts (+ i 1) (if range (cons range result) result)))]
+                [else (find-comma (+ i 1))]))))
         #f)))
+
+(define (generate-boundary)
+  (let ([chars "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"])
+    (let loop ([i 0] [result ""])
+      (if (>= i 16)
+          result
+          (loop (+ i 1)
+                (string-append result (string (string-ref chars (random (string-length chars))))))))))
+
+(define (generate-multipart-body fip ranges total-size boundary content-type)
+  (let-values ([(out get) (open-bytevector-output-port)])
+    (for-each
+      (lambda (range)
+        (let ([start (car range)]
+              [end (cdr range)])
+          (put-bytevector out (string->utf8 (string-append "--" boundary "\r\n")))
+          (put-bytevector out (string->utf8 (string-append "Content-Type: " content-type "\r\n")))
+          (put-bytevector out (string->utf8 (string-append "Content-Range: bytes " (number->string start) "-" (number->string end) "/" (number->string total-size) "\r\n\r\n")))
+          (set-port-position! fip start)
+          (let ([bv (make-bytevector (+ (- end start) 1))])
+            (get-bytevector-n! fip bv 0 (+ (- end start) 1))
+            (put-bytevector out bv))
+          (put-bytevector out (string->utf8 "\r\n"))))
+      ranges)
+    (put-bytevector out (string->utf8 (string-append "--" boundary "--\r\n")))
+    (close-input-port fip)
+    (get)))
 
 (define (connection-close? headers protocol)
   (let ([conn (assoc-ref headers "connection:")])
@@ -172,13 +213,17 @@
         (let ([tv (foreign-alloc sz)])
           (foreign-set! 'long tv 0 seconds)
           (foreign-set! 'long tv (foreign-sizeof 'long) microseconds)
-          (let ([rc (f (socket-file-descriptor sock) 1 20 tv sz)])
-            (foreign-free tv)
-            rc))))))
+          (f (socket-file-descriptor sock) 1 20 tv sz)   ; SO_RCVTIMEO
+          (f (socket-file-descriptor sock) 1 21 tv sz)   ; SO_SNDTIMEO
+          (foreign-free tv))))))
+
+(define waitpid
+  (foreign-procedure "waitpid" (int void* int) int))
 
 (define (gzip-compress bv)
   (let-values ([(to-stdin from-stdout from-stderr pid) (open-process-ports "gzip -c")])
     (put-bytevector to-stdin bv)
+    (flush-output-port to-stdin)
     (close-output-port to-stdin)
     (let-values ([(out get) (open-bytevector-output-port)])
       (let loop ()
@@ -187,6 +232,9 @@
               (begin
                 (close-input-port from-stdout)
                 (close-input-port from-stderr)
+                (let ([status-ptr (foreign-alloc (foreign-sizeof 'int))])
+                  (waitpid pid status-ptr 0)
+                  (foreign-free status-ptr))
                 (get))
               (begin
                 (put-bytevector out chunk)
@@ -208,6 +256,7 @@
     (thread-pool-stop! (server-thread-pool server))))
 
 (define *current-server-info* #f)
+(define *current-config* #f)
 
 (define start-server
   (case-lambda 
@@ -227,11 +276,19 @@
              [conn-counter (make-connection-counter 1024)]
              [server (make-server port log-port thread-pool)])
         (set! *current-server-info* (cons server request-queue))
+        (set! *current-config* config)
         (register-signal-handler 2
           (lambda (sig)
             (stop-server server request-queue)
             (when (logger? log-port)
               (logger-shutdown! log-port))))
+        (register-signal-handler 1
+          (lambda (sig)
+            (display "Reloading configuration...") (newline)
+            (guard (ex [#t (display "Config reload failed: ") (display ex) (newline)])
+              (let ([new-config (config-load "config.scm")])
+                (set! *current-config* new-config)
+                (display "Configuration reloaded.") (newline)))))
         (map 
           (lambda (i)
             (thread-pool-add-job thread-pool 
@@ -294,11 +351,27 @@
 (define file-cache-inst (make-file-cache))
 (define metrics-inst (metrics-new))
 
-(define (serve-static-file static-path)
+(define (serve-static-file static-path-default)
   (lambda (env)
-    (let ([method (env-method env)]
-          [path (env-path env)]
-          [headers (env-headers env)])
+    (let* ([method (env-method env)]
+           [path (env-path env)]
+           [headers (env-headers env)]
+           [static-path
+            (let ([host (assoc-ref headers "host:")]
+                  [config *current-config*])
+             (if (and config host)
+                 (let ([vhosts (config-get config 'vhosts)])
+                   (if vhosts
+                       (let ([h (let loop ([i 0])
+                                  (if (>= i (string-length host))
+                                      host
+                                      (if (char=? (string-ref host i) #\:)
+                                          (substring host 0 i)
+                                          (loop (+ i 1)))))])
+                         (let ([entry (assoc h vhosts)])
+                           (if entry (cdr entry) static-path-default)))
+                       static-path-default))
+                 static-path-default))])
       (if (equal? path "/health")
           (make-response status:ok
             '(("Content-Type" . "application/json"))
@@ -323,7 +396,27 @@
                          path)])
                 (if (not actual-fip)
                     (if (file-exists? local)
-                        (make-response status:forbidden '() '())
+                        (if (guard (ex [#t #f]) (file-directory? local))
+                            (let ([entries (directory-list local)])
+                              (make-response status:ok
+                                '(("Content-Type" . "text/html"))
+                                (string->utf8
+                                  (let ([title (string-append "Index of " path)])
+                                    (string-append
+                                      "<!DOCTYPE html>\n<html>\n<head><title>" title "</title></head>\n"
+                                      "<body>\n<h1>" title "</h1>\n<hr>\n<ul>\n"
+                                      (if (equal? path "/")
+                                          ""
+                                          "<li><a href=\"../\">Parent Directory</a></li>\n")
+                                      (let loop ([entries (sort string<? entries)])
+                                        (if (null? entries)
+                                            ""
+                                            (let ([entry (car entries)])
+                                              (string-append
+                                                "<li><a href=\"" entry (if (guard (ex [#t #f]) (file-directory? (string-append local "/" entry))) "/" "") "\">" entry "</a></li>\n"
+                                                (loop (cdr entries))))))
+                                      "</ul>\n<hr>\n</body>\n</html>\n")))))
+                            (make-response status:forbidden '() '()))
                         (make-response status:not-found '() '()))
                     (let ([size (file-length actual-fip)]
                           [mtime (guard (ex [#t 0]) (time-second (file-modification-time local)))]
@@ -338,17 +431,26 @@
                                 ("ETag" . ,(cache-generate-etag mtime size)))
                               '()))
                           (if range
-                              (let ([range-pair (parse-range-header range size)])
-                            (if range-pair
-                                (let* ([start (car range-pair)]
-                                       [end (cdr range-pair)]
-                                       [partial-size (+ (- end start) 1)])
-                                  (guard (ex [#t (begin (close-input-port actual-fip) (raise ex))])
-                                    (set-port-position! actual-fip start))
-                                  (make-response status:partial-content
-                                    `(("Content-Type" . ,content-type)
-                                      ("Content-Range" . ,(string-append "bytes " (number->string start) "-" (number->string end) "/" (number->string size))))
-                                    (cons actual-fip partial-size)))
+                              (let ([ranges (parse-range-header range size)])
+                            (if ranges
+                                (if (null? (cdr ranges))
+                                    ;; single range
+                                    (let* ([start (caar ranges)]
+                                           [end (cdar ranges)]
+                                           [partial-size (+ (- end start) 1)])
+                                      (guard (ex [#t (begin (close-input-port actual-fip) (raise ex))])
+                                        (set-port-position! actual-fip start))
+                                      (make-response status:partial-content
+                                        `(("Content-Type" . ,content-type)
+                                          ("Content-Range" . ,(string-append "bytes " (number->string start) "-" (number->string end) "/" (number->string size))))
+                                        (cons actual-fip partial-size)))
+                                    ;; multiple ranges
+                                    (let ([boundary (generate-boundary)])
+                                      (let ([body (generate-multipart-body actual-fip ranges size boundary content-type)])
+                                        (make-response status:partial-content
+                                          `(("Content-Type" . ,(string-append "multipart/byteranges; boundary=" boundary))
+                                            ("Content-Length" . ,(number->string (bytevector-length body))))
+                                          body))))
                                 (begin
                                   (close-input-port actual-fip)
                                   (make-response status:range-not-satisfiable '() '()))))
@@ -392,8 +494,9 @@
           (let ([binary-input-port (socket-input-port socket)]
                 [binary-output-port (socket-output-port socket)])
             (let loop ([request-count 0])
-              (socket-set-timeout! socket (or (and config (config-get config 'idle-timeout-ms)) 5000))
-              (guard (c
+              (let ([config (or *current-config* config)])
+                (socket-set-timeout! socket (or (and config (config-get config 'idle-timeout-ms)) 5000))
+                (guard (c
                        [(number? c)
                         (write-response binary-output-port c '() '() #t #f)
                         (log-request log-port "UNKNOWN" "/" c 0 "HTTP/1.1")
@@ -407,11 +510,37 @@
                                 [(closure1 target-string) (get-values-from-coroutine closure0 'uri)])
                     (socket-set-timeout! socket 30000)
                     (let* ([env (build-request-env closure1 method target-string)]
+                           [env (if (eq? (env-body env) 'stream)
+                                    (let ([content-length (assq-ref env 'content-length)])
+                                      (let ([remaining-box (box content-length)]
+                                            [count-box (box 0)])
+                                        (let ([counting-port (make-custom-binary-input-port
+                                                               "body-port"
+                                                               (lambda (bv start n)
+                                                                 (let ([remaining (unbox remaining-box)])
+                                                                   (if (<= remaining 0)
+                                                                       0
+                                                                       (let ([to-read (min n remaining)])
+                                                                         (let ([actual (get-bytevector-n! binary-input-port bv start to-read)])
+                                                                           (if (number? actual)
+                                                                               (begin
+                                                                                 (set-box! remaining-box (- remaining actual))
+                                                                                 (set-box! count-box (+ (unbox count-box) actual))
+                                                                                 actual)
+                                                                               0))))))
+                                                               #f #f
+                                                               (lambda () (void)))])
+                                          `(,@env (body-port . ,counting-port) (body-count . ,count-box)))))
+                                    env)]
                            [path (assq-ref env 'path)]
                            [headers (assq-ref env 'headers)]
                            [protocol (assq-ref env 'protocol)]
                            [close? (or (>= request-count 100)
-                                       (connection-close? headers protocol))])
+                                       (connection-close? headers protocol)
+                                       (and (eq? (env-body env) 'stream)
+                                            (let ([count-box (assq-ref env 'body-count)])
+                                              (let ([content-length (assq-ref env 'content-length)])
+                                                (< (unbox count-box) content-length)))))])
                       ;; Enforce max Content-Length
                       (let ([content-length-str (assoc-ref headers "content-length:")])
                         (when content-length-str
@@ -458,7 +587,7 @@
                               (if (not config)
                                   (log-request log-port method path (or status status:not-found) (body-size body) protocol (assq-ref env 'client-ip) (assoc-ref headers "user-agent:")))
                               (flush-output-port binary-output-port)
-                              (if (not close?) (loop (+ request-count 1))))))))))))))))))
+                              (if (not close?) (loop (+ request-count 1)))))))))))))))))))
 
 
 )
