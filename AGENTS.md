@@ -17,6 +17,7 @@
 
 | Version | Notes |
 |---------|-------|
+| 1.0.7 | Production hardening: vhosts, multirange, directory index, request body streaming, SO_SNDTIMEO slow-write protection, FD leak hardening (waitpid), gzip flush fix, graceful shutdown, config hot reload |
 | 1.0.6 | Production optimizations: Linux sendfile zero-copy, in-memory LRU hot-file cache, per-phase socket timeouts (5s header / 30s response), access-log rotation with CLF/JSON formats, HTTP/1.1 Keep-Alive pipeline |
 | 1.0.5 | Performance & security hardening: O(n²) → O(1) response headers, constant bytevector caching, SO_SNDTIMEO, duplicate header defense, null-byte path protection, error-page cache, ETag cache, MIME hashtable, Accept-Encoding cache, read-to-colon |
 | 1.0.4 | Production features: ETag/304, rate limiting, CORS, error pages, health check, request tracing, gzip, ranges, chunked encoding, Nginx TLS docs |
@@ -82,6 +83,8 @@ core/util/
   association.sls       ; assq-ref, assoc-ref, assv-ref, make-alist
 core/util/
   date.sls              ; date->string (RFC-like date formatting)
+core/util/
+  form.sls              ; parse-form-urlencoded, string-split helpers
 
 tests/
   core/protocol/test-request-parse.sps  ; Tests request coroutine parsing
@@ -137,12 +140,23 @@ Case-lambda signatures:
 - `(start-server port thread-num expire-duration ticks)`
 - `(start-server port log-port thread-num expire-duration ticks)`
 
-Default behavior: serves static files from the hardcoded path `./static` (`private-static-path`). Only static file serving is implemented; the `init-lifecycle` handler reads the URI path, prepends `./static`, and streams the file content back.
+Default behavior: serves static files from the hardcoded path `./static` (`private-static-path`). The `init-lifecycle` handler reads the URI path, prepends the static path, and streams the file content back.
 
-**New in 1.0.6:**
-- `port` can be a raw output port or a `logger` record (see below). When omitted, a rotating CLF logger writing to `access-YYYY-MM-DD.log` is created automatically.
+**Static file features:**
+- **ETag / 304 Not Modified**: compares `If-None-Match` and `If-Modified-Since` against file mtime.
+- **Range requests**: single-range (`206 Partial Content`) and multirange (`multipart/byteranges`) are supported.
+- **HEAD**: returns headers without body; `Content-Length` and `ETag` are preserved.
+- **gzip**: compresses text/json/javascript responses >128 bytes when `Accept-Encoding: gzip` is present.
+- **Directory index**: if a directory has no `index.html`, an HTML listing is generated automatically.
+- **Vhosts**: `Host` header is matched against `config` `vhosts` alist to select a per-domain `static-path`.
+- **Method whitelist**: non-GET/HEAD/OPTIONS requests receive `405 Not Allowed`.
+
+**Connection & lifecycle:**
 - Per-connection Keep-Alive loop supports HTTP/1.1 pipelining up to 100 requests per connection.
 - Header-read phase uses a 5-second socket timeout; response-write phase uses 30 seconds.
+- `socket-set-timeout!` sets both `SO_RCVTIMEO` and `SO_SNDTIMEO` for slow-client protection.
+- SIGINT triggers graceful shutdown (`stop-server`); SIGHUP reloads `config.scm` into `*current-config*`.
+- `port` can be a raw output port or a `logger` record. When omitted, a rotating CLF logger is created automatically.
 
 ### Request Coroutine (`parse-request-coroutine`)
 Returns a coroutine closure. Use `get-values-from-coroutine` to extract fields:
@@ -152,6 +166,8 @@ Returns a coroutine closure. Use `get-values-from-coroutine` to extract fields:
                [(c3 uri)    (get-values-from-coroutine c2 'uri)])
     ...))
 ```
+
+**Body streaming:** When `Content-Length` exceeds the default 1MB `stream-threshold`, the coroutine yields `body` as the symbol `stream` instead of a bytevector. The connection handler wraps the underlying socket in a counting port (see `env-body-port`). If the handler does not consume the full body, the connection is closed automatically.
 
 ### Response Construction (`write-response`)
 ```scheme
@@ -172,6 +188,14 @@ Returns a coroutine closure. Use `get-values-from-coroutine` to extract fields:
 - LRU eviction (max 128 entries, 256KB per entry).
 - Keys are file paths; entries store `(content etag mtime size last-access)`.
 - `serve-static-file` automatically caches files ≤256KB and returns `304 Not Modified` when `If-None-Match` matches the cached ETag.
+
+### Env Body Accessors (`core/handler.sls`)
+```scheme
+(env-body-string env)   ; bytevector -> string, or reads stream port -> string
+(env-body-form env)     ; parses application/x-www-form-urlencoded body into alist
+(env-body-port env)     ; returns an input port for the request body
+```
+For small bodies (`≤ 1MB`), `env-body-port` wraps the cached bytevector. For streamed bodies, it returns a custom port that reads directly from the socket and tracks consumed bytes.
 
 ### Error Handling in `init-lifecycle`
 Inside the main request handler (`http-pixiu.sls`):
