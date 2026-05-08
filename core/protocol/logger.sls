@@ -3,17 +3,27 @@
     make-logger
     logger?
     logger-port
+    logger-shutdown!
     log-request
     log-error
     log-info)
 
   (import (chezscheme)
+          (slib queue)
           (http-pixiu core util date))
 
   (define log-lock (make-mutex))
 
   (define-record-type (logger make-logger-raw logger?)
-    (fields (mutable port) (mutable date-str) (mutable base-path) format))
+    (fields (mutable port)
+            (mutable date-str)
+            (mutable base-path)
+            format
+            (mutable queue)
+            (mutable mutex)
+            (mutable condition)
+            (mutable shutdown?)
+            (mutable thread)))
 
   (define (current-date-str)
     (let ([t (current-date)])
@@ -30,8 +40,32 @@
       (native-transcoder)))
 
   (define (make-logger base-path format)
-    (let ([d (current-date-str)])
-      (make-logger-raw (open-log-file base-path d) d base-path format)))
+    (let ([d (current-date-str)]
+          [q (make-queue)]
+          [m (make-mutex)]
+          [c (make-condition)])
+      (let ([port (open-log-file base-path d)])
+        (let ([logger (make-logger-raw port d base-path format q m c #f #f)])
+          (logger-thread-set! logger
+            (fork-thread
+              (lambda ()
+                (let loop ()
+                  (with-mutex m
+                    (if (queue-empty? q)
+                        (if (logger-shutdown? logger)
+                            (begin
+                              (close-output-port (logger-port logger))
+                              (display "Logger thread shutting down.") (newline))
+                            (begin
+                              (condition-wait c m)
+                              (loop)))
+                        (let ([msg (dequeue! q)])
+                          (with-mutex log-lock
+                            (maybe-rotate! logger)
+                            (put-string (logger-port logger) msg)
+                            (flush-output-port (logger-port logger)))
+                          (loop))))))))
+          logger))))
 
   (define (maybe-rotate! log-info)
     (when (logger? log-info)
@@ -66,7 +100,12 @@
   (define (current-timestamp)
     (date->string (current-date)))
 
-  (define (log-message level msg port-or-logger)
+  (define (logger-shutdown! logger)
+    (with-mutex (logger-mutex logger)
+      (logger-shutdown?-set! logger #t)
+      (condition-signal (logger-condition logger))))
+
+(define (log-message level msg port-or-logger)
     (with-mutex log-lock
       (maybe-rotate! port-or-logger)
       (let ([port (if (logger? port-or-logger) (logger-port port-or-logger) port-or-logger)])
@@ -84,44 +123,27 @@
           [client-ip (if (>= (length rest) 2) (list-ref rest 1) #f)]
           [user-agent (if (>= (length rest) 3) (list-ref rest 2) #f)])
       (if (logger? port-or-logger)
-          (with-mutex log-lock
-            (maybe-rotate! port-or-logger)
-            (let ([port (logger-port port-or-logger)])
-              (case (logger-format port-or-logger)
-                [(json)
-                 (put-string port "{\"time\":\"")
-                 (put-string port (current-timestamp))
-                 (put-string port "\",\"client\":\"")
-                 (put-string port (or client-ip "-"))
-                 (put-string port "\",\"method\":\"")
-                 (put-string port method)
-                 (put-string port "\",\"path\":\"")
-                 (put-string port path)
-                 (put-string port "\",\"status\":")
-                 (put-string port (number->string status))
-                 (put-string port ",\"size\":")
-                 (put-string port (number->string response-size))
-                 (put-string port "}\n")
-                 (flush-output-port port)]
-                [else
-                 ;; Nginx CLF
-                 (put-string port (or client-ip "-"))
-                 (put-string port " - - [")
-                 (put-string port (clf-date-string))
-                 (put-string port "] \"")
-                 (put-string port method)
-                 (put-string port " ")
-                 (put-string port path)
-                 (put-string port " ")
-                 (put-string port protocol)
-                 (put-string port "\" ")
-                 (put-string port (number->string status))
-                 (put-string port " ")
-                 (put-string port (number->string response-size))
-                 (put-string port " \"-\" \"")
-                 (put-string port (or user-agent "-"))
-                 (put-string port "\"\n")
-                 (flush-output-port port)])))
+          (let ([msg
+                 (case (logger-format port-or-logger)
+                   [(json)
+                    (string-append
+                      "{\"time\":\"" (current-timestamp) "\","
+                      "\"client\":\"" (or client-ip "-") "\","
+                      "\"method\":\"" method "\","
+                      "\"path\":\"" path "\","
+                      "\"status\":" (number->string status) ","
+                      "\"size\":" (number->string response-size) "}\n")]
+                   [else
+                    ;; Nginx CLF
+                    (string-append
+                      (or client-ip "-") " - - [" (clf-date-string) "] \""
+                      method " " path " " protocol "\" "
+                      (number->string status) " "
+                      (number->string response-size) " \"-\" \""
+                      (or user-agent "-") "\"\n")])])
+            (with-mutex (logger-mutex port-or-logger)
+              (enqueue! (logger-queue port-or-logger) msg)
+              (condition-signal (logger-condition port-or-logger))))
           ;; Fallback: old flat format for raw ports
           (let ([msg (string-append method " \"" path "\" " (number->string status) " " (number->string response-size))])
             (log-message "INFO" msg port-or-logger)))))

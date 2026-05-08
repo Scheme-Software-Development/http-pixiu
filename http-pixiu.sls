@@ -227,7 +227,9 @@
         (set! *current-server-info* (cons server request-queue))
         (register-signal-handler 2
           (lambda (sig)
-            (stop-server server request-queue)))
+            (stop-server server request-queue)
+            (when (logger? log-port)
+              (logger-shutdown! log-port))))
         (map 
           (lambda (i)
             (thread-pool-add-job thread-pool 
@@ -388,7 +390,7 @@
           (let ([binary-input-port (socket-input-port socket)]
                 [binary-output-port (socket-output-port socket)])
             (let loop ([request-count 0])
-              (socket-set-timeout! socket 5000)
+              (socket-set-timeout! socket (or (and config (config-get config 'idle-timeout-ms)) 5000))
               (guard (c
                        [(number? c)
                         (write-response binary-output-port c '() '() #t #f)
