@@ -203,7 +203,9 @@
 
 (define (stop-server server request-queue)
   (set! shutdown-flag #t)
-  (request-queue-shutdown request-queue))
+  (request-queue-shutdown request-queue)
+  (guard (ex [#t (display "Error stopping thread pool: ") (display ex) (newline)])
+    (thread-pool-stop! (server-thread-pool server))))
 
 (define *current-server-info* #f)
 
