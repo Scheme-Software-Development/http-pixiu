@@ -24,6 +24,7 @@
     (http-pixiu core config)
     (http-pixiu core util io)
     (http-pixiu core util association)
+    (http-pixiu core util date)
     (http-pixiu core mime)
     (http-pixiu core cache)
     (http-pixiu core zlib)
@@ -328,6 +329,14 @@
                               (loop)
                               (begin
                                 (connection-counter-release! conn-counter)
+                                (guard (ex [#t (void)])
+                                  (let ([out (socket-output-port received-socket)])
+                                    (put-bytevector out (string->utf8 "HTTP/1.1 503 Service Unavailable
+Content-Length: 0
+Connection: close
+
+"))
+                                    (flush-output-port out)))
                                 (guard (ex [#t (void)]) (socket-close received-socket))
                                 (loop))))
                         (begin
@@ -397,8 +406,12 @@
                 (if (not actual-fip)
                     (if (file-exists? local)
                         (if (guard (ex [#t #f]) (file-directory? local))
-                            (let ([entries (directory-list local)])
-                              (make-response status:ok
+                            (if (not (equal? (string-ref path (- (string-length path) 1)) #\/))
+                                (make-response status:moved-permanently
+                                  `(("Location" . ,(string-append path "/")))
+                                  '())
+                                (let ([entries (directory-list local)])
+                                  (make-response status:ok
                                 '(("Content-Type" . "text/html"))
                                 (string->utf8
                                   (let ([title (string-append "Index of " path)])
@@ -415,19 +428,32 @@
                                               (string-append
                                                 "<li><a href=\"" entry (if (guard (ex [#t #f]) (file-directory? (string-append local "/" entry))) "/" "") "\">" entry "</a></li>\n"
                                                 (loop (cdr entries))))))
-                                      "</ul>\n<hr>\n</body>\n</html>\n")))))
+                                      "</ul>\n<hr>\n</body>\n</html>\n"))))))
                             (make-response status:forbidden '() '()))
                         (make-response status:not-found '() '()))
                     (let ([size (file-length actual-fip)]
-                          [mtime (guard (ex [#t 0]) (time-second (file-modification-time local)))]
-                          [content-type (guess-mime-type actual-path)]
+                          [mtime-time (guard (ex [#t (make-time 'time-utc 0 0)]) (file-modification-time local))]
+                          [content-type (let ([ct (guess-mime-type actual-path)])
+                                          (if (or (and (>= (string-length ct) 5)
+                                                       (equal? (substring ct 0 5) "text/"))
+                                                  (member ct '("application/json" "application/javascript" "application/xml")))
+                                              (string-append ct "; charset=utf-8")
+                                              ct))]
                           [range (assoc-ref headers "range:")]
                           [if-none-match (assoc-ref headers "if-none-match:")])
+                      (let* ([mtime (time-second mtime-time)]
+                             [last-modified (date->string (time-utc->date mtime-time 0))]
+                             [cache-max-age (let ([c *current-config*])
+                                              (or (and c (config-get c 'cache-control-max-age)) 3600))]
+                             [base-headers `(,(cons "Accept-Ranges" "bytes")
+                                            ("Last-Modified" . ,last-modified)
+                                            ("Cache-Control" . ,(string-append "public, max-age=" (number->string cache-max-age))))])
                       (if (and if-none-match (equal? if-none-match (cache-generate-etag mtime size)))
                           (begin
                             (close-input-port actual-fip)
                             (make-response status:not-modified
-                              `(("Content-Type" . ,content-type)
+                              `(,@base-headers
+                                ("Content-Type" . ,content-type)
                                 ("ETag" . ,(cache-generate-etag mtime size)))
                               '()))
                           (if range
@@ -441,14 +467,16 @@
                                       (guard (ex [#t (begin (close-input-port actual-fip) (raise ex))])
                                         (set-port-position! actual-fip start))
                                       (make-response status:partial-content
-                                        `(("Content-Type" . ,content-type)
+                                        `(,@base-headers
+                                          ("Content-Type" . ,content-type)
                                           ("Content-Range" . ,(string-append "bytes " (number->string start) "-" (number->string end) "/" (number->string size))))
                                         (cons actual-fip partial-size)))
                                     ;; multiple ranges
                                     (let ([boundary (generate-boundary)])
                                       (let ([body (generate-multipart-body actual-fip ranges size boundary content-type)])
                                         (make-response status:partial-content
-                                          `(("Content-Type" . ,(string-append "multipart/byteranges; boundary=" boundary))
+                                          `(,@base-headers
+                                            ("Content-Type" . ,(string-append "multipart/byteranges; boundary=" boundary))
                                             ("Content-Length" . ,(number->string (bytevector-length body))))
                                           body))))
                                 (begin
@@ -461,7 +489,8 @@
                                   (close-input-port actual-fip)
                                   (let ([compressed (gzip-compress bv)])
                                     (make-response status:ok
-                                      `(("Content-Type" . ,content-type)
+                                      `(,@base-headers
+                                        ("Content-Type" . ,content-type)
                                         ("Content-Encoding" . "gzip"))
                                       compressed))))
                               (let ([cached (cache-lookup file-cache-inst actual-path headers)])
@@ -469,7 +498,8 @@
                                     (begin
                                       (close-input-port actual-fip)
                                       (make-response status:ok
-                                        `(("Content-Type" . ,content-type)
+                                        `(,@base-headers
+                                          ("Content-Type" . ,content-type)
                                           ("ETag" . ,(cache-etag cached)))
                                         (cache-content cached)))
                                     (if (<= size (* 256 1024))
@@ -478,12 +508,14 @@
                                           (close-input-port actual-fip)
                                           (cache-store! file-cache-inst actual-path bv mtime size)
                                           (make-response status:ok
-                                            `(("Content-Type" . ,content-type)
+                                            `(,@base-headers
+                                              ("Content-Type" . ,content-type)
                                               ("ETag" . ,(cache-generate-etag mtime size)))
                                             bv))
                                         (make-response status:ok
-                                          `(("Content-Type" . ,content-type))
-                                          (cons actual-fip size)))))))))))))))))))
+                                          `(,@base-headers
+                                            ("Content-Type" . ,content-type))
+                                          (cons actual-fip size))))))))))))))))))))
 
 (define (init-lifecycle socket handler log-port static-path config conn-counter)
   (let ([default-handler (serve-static-file static-path)]
@@ -498,13 +530,13 @@
                 (socket-set-timeout! socket (or (and config (config-get config 'idle-timeout-ms)) 5000))
                 (guard (c
                        [(number? c)
-                        (write-response binary-output-port c '() '() #t #f)
+                        (guard (ex [#t (void)]) (write-response binary-output-port c '() '() #t #f))
                         (log-request log-port "UNKNOWN" "/" c 0 "HTTP/1.1")
-                        (flush-output-port binary-output-port)]
+                        (guard (ex [#t (void)]) (flush-output-port binary-output-port))]
                        [else
-                        (write-response binary-output-port status:internal-server-error '() '() #t #f)
+                        (guard (ex [#t (void)]) (write-response binary-output-port status:internal-server-error '() '() #t #f))
                         (log-request log-port "UNKNOWN" "/" status:internal-server-error 0 "HTTP/1.1")
-                        (flush-output-port binary-output-port)])
+                        (guard (ex [#t (void)]) (flush-output-port binary-output-port))])
                 (let ([closure (parse-request-coroutine binary-input-port)])
                   (let*-values ([(closure0 method) (get-values-from-coroutine closure 'method)]
                                 [(closure1 target-string) (get-values-from-coroutine closure0 'uri)])
