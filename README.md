@@ -16,9 +16,12 @@ A lightweight continuation-based HTTP server written in Chez Scheme (R6RS).
 - **Tickal task queue** — Request scheduling with Chez Scheme engines and configurable timeout.
 - **Thread pool** — Fixed-size worker thread pool for concurrent request handling.
 - **ETag / 304 Not Modified** — Static files emit ETags; conditional requests return `304` with no body.
+- **Base headers** — Static file responses include `Accept-Ranges: bytes`, `Last-Modified`, and `Cache-Control: public, max-age=...`.
+- **Trailing-slash redirect** — Directory URLs without a trailing `/` receive `301 Moved Permanently`.
 - **Rate limiting** — Per-server token-bucket rate limiter (default: 1000 req/min); returns `429 Too Many Requests` when exceeded.
 - **CORS preflight** — `OPTIONS` requests receive `204 No Content` with permissive CORS headers.
 - **Custom error pages** — Looks for `<static-path>/error-{code}.html`; falls back to minimal HTML if absent.
+- **Queue-full 503** — When the request queue is saturated, new connections receive `503 Service Unavailable` before being closed.
 - **Health check endpoint** — `GET /health` returns `{"status":"ok"}`.
 - **Request tracing** — Every response includes `X-Request-ID`.
 - **Gzip compression** — Text responses ≤1 MiB are automatically gzip-compressed when client accepts it.
@@ -83,6 +86,14 @@ Returns a `(server . request-queue)` pair.
 
 - `handler` — `(lambda (env out-port) ...)`  Return `#t` if handled; `#f` to fall through to static file serving.
 - `static-path` — Root directory for static files (default: `"./static"`).
+
+### `serve-static-file`
+
+```scheme
+(serve-static-file static-path)
+```
+
+Returns a handler function `(lambda (env) ...)` that serves static files from `static-path` with caching, gzip, range requests, ETags, and base headers. Used internally by `start-server` when no custom handler is provided.
 
 Example with custom handler:
 
