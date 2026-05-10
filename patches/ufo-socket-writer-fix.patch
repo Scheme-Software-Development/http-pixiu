@@ -1,0 +1,22 @@
+--- a/socket/impl.chezscheme.sls
++++ b/socket/impl.chezscheme.sls
+@@ -196,11 +196,17 @@
+   (define socket-port-writer
+     (lambda (socket)
+       (lambda (bytevector-src start n)
+         (if (fx=? start 0)
+-            (guard (ex [#t 0]) (socket-send socket bytevector-src 0 n))
++            (let ([rc (guard (ex [#t -1]) (socket-send socket bytevector-src 0 n))])
++              (if (fx<=? rc 0)
++                  (raise (condition (make-i/o-write-error) (make-message-condition "socket-send failed")))
++                  rc))
+             (let ([slice (make-bytevector n)])
+               (bytevector-copy! bytevector-src start slice 0 n)
+-              (guard (ex [#t 0]) (socket-send socket slice 0 n)))))))
++              (let ([rc (guard (ex [#t -1]) (socket-send socket slice 0 n))])
++                (if (fx<=? rc 0)
++                    (raise (condition (make-i/o-write-error) (make-message-condition "socket-send failed")))
++                    rc)))))))
+ 
+   (define open-socket-input-port
+     (lambda (socket)

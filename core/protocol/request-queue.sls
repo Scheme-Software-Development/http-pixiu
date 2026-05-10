@@ -73,15 +73,16 @@
 
 (define (request-queue-pop queue)
   (with-mutex (request-queue-mutex queue)
-    (if (queue-empty? (request-queue-queue queue))
-      (if (request-queue-shutdown? queue)
-        #f
+    (let loop ()
+      (if (queue-empty? (request-queue-queue queue))
+        (if (request-queue-shutdown? queue)
+          #f
+          (begin
+            (condition-wait (request-queue-condition queue) (request-queue-mutex queue))
+            (loop)))
         (begin
-          (condition-wait (request-queue-condition queue) (request-queue-mutex queue))
-          (request-queue-pop queue)))
-      (begin
-        (request-queue-current-size-set! queue (- (request-queue-current-size queue) 1))
-        (tickal-task-job (dequeue! (request-queue-queue queue)))))))
+          (request-queue-current-size-set! queue (- (request-queue-current-size queue) 1))
+          (tickal-task-job (dequeue! (request-queue-queue queue))))))))
 
 (define (request-queue-shutdown queue)
   (with-mutex (request-queue-mutex queue)

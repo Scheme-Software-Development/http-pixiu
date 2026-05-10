@@ -8,22 +8,40 @@
   (fields (mutable table)
           window-seconds
           max-requests
+          max-entries
           mutex))
 
 (define (make-rate-limiter window-seconds max-requests)
-  (make-rate-limiter-raw (make-hashtable string-hash string=?) window-seconds max-requests (make-mutex)))
-
-
+  (make-rate-limiter-raw (make-hashtable string-hash string=?)
+                         window-seconds
+                         max-requests
+                         10000
+                         (make-mutex)))
 
 (define (current-epoch)
   (floor (time-second (current-time))))
+
+(define (rate-limiter-cleanup! limiter)
+  (with-mutex (rate-limiter-mutex limiter)
+    (let ([table (rate-limiter-table limiter)]
+          [window (rate-limiter-window-seconds limiter)]
+          [now (current-epoch)])
+      (vector-for-each
+        (lambda (key)
+          (let ([entry (hashtable-ref table key #f)])
+            (when (and entry (> (- now (car entry)) (* window 2)))
+              (hashtable-delete! table key))))
+        (hashtable-keys table)))))
 
 (define (rate-limiter-allow? limiter client-id)
   (with-mutex (rate-limiter-mutex limiter)
     (let ([table (rate-limiter-table limiter)]
           [now (current-epoch)]
           [window (rate-limiter-window-seconds limiter)]
-          [max-req (rate-limiter-max-requests limiter)])
+          [max-req (rate-limiter-max-requests limiter)]
+          [max-entries (rate-limiter-max-entries limiter)])
+      (when (>= (hashtable-size table) max-entries)
+        (rate-limiter-cleanup! limiter))
       (let ([entry (hashtable-ref table client-id #f)])
         (if entry
             (let ([bucket-start (car entry)]

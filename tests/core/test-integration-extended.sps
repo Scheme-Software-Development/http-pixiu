@@ -34,7 +34,7 @@
     (guard (ex [#t (void)]) (delete-file script))
     (guard (ex [#t (void)]) (delete-file pid-file))
     ;; Clean up any leftover processes from previous runs
-    (system (string-append "pkill -9 -f \"scheme --script " script "\" 2>/dev/null >/dev/null 2>&1"))
+    (system (string-append "pkill -15 -f \"scheme --script " script "\" 2>/dev/null >/dev/null 2>&1"))
     (sleep (make-time 'time-duration 0 1))
     (call-with-output-file script
       (lambda (p)
@@ -47,20 +47,20 @@
         (put-string p "\"\n  (lambda (p) (display (get-process-id) p) (newline p)))\n")
         (put-string p "(start-server \"")
         (put-string p test-port)
-        (put-string p "\" (current-output-port) 1 1000 100000 #f \"")
+        (put-string p "\" (current-output-port) 1 30000 100000 #f \"")
         (put-string p tmp-dir)
         (put-string p "\")\n")))
     (system 
       (string-append 
         "cd " (current-directory) " && source .akku/bin/activate && scheme --script " script 
-        " > /dev/null 2>&1 & exit 0"))
+        " > /tmp/http-pixiu-test-server.log 2>&1 & echo $! > " pid-file))
     (sleep (make-time 'time-duration 0 2))))
 
 (define (stop-server-process)
   (guard (ex [#t (void)])
-    (let ([script "/tmp/http-pixiu-test-server-extended.sps"])
-      ;; Kill both the scheme process and its parent shell
-      (system (string-append "pkill -9 -f \"http-pixiu-test-server-extended\" 2>/dev/null >/dev/null 2>&1"))
+    (let ([pid (guard (ex [#t #f]) (call-with-input-file pid-file get-string-all))])
+      (when pid
+        (system (string-append "kill -15 " pid " 2>/dev/null >/dev/null 2>&1")))
       (guard (ex [#t (void)]) (delete-file pid-file)))))
 
 (define (wait-for-server)
@@ -77,7 +77,7 @@
 (define (curl-get path . headers)
   (let ([header-args (apply string-append 
                             (map (lambda (h) (string-append " -H \"" h "\"")) headers))])
-    (system (string-append "curl -s --connect-timeout 2 --max-time 3 -o /tmp/http-pixiu-response.body -D /tmp/http-pixiu-response.hdr -w '%{http_code}' "
+    (system (string-append "curl -s --connect-timeout 2 --max-time 10 -o /dev/null -w '%{http_code}' -H \"Connection: close\""
                            header-args " " base-url path
                            " > /tmp/http-pixiu-response.rc 2>/dev/null"))
     (let ([code (guard (ex [#t "000"]) (call-with-input-file "/tmp/http-pixiu-response.rc" get-string-all))])
@@ -89,6 +89,7 @@
   (lambda ()
     (start-server-process)
     (wait-for-server)
+    (sleep (make-time 'time-duration 0 1))
     (test-equal "GET existing file returns 200" "200" (curl-get "/index.html"))
     (test-equal "GET non-existing file returns 404" "404" (curl-get "/notfound.txt"))
     (test-equal "Directory with index returns 200" "200" (curl-get "/"))

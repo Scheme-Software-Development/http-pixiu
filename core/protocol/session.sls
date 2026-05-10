@@ -1,12 +1,14 @@
 (library (http-pixiu core protocol session)
   (export 
     session-store-create
+    session-store-timeout-seconds
     session-get
     session-set!
     session-destroy!
     parse-cookie-header
     generate-session-id
-    make-session-cookie-header)
+    make-session-cookie-header
+    env-session-set!)
   (import (chezscheme))
 
 (define-record-type session-store
@@ -83,5 +85,20 @@
 (define (make-session-cookie-header session-id timeout-seconds)
   (string-append "session-id=" session-id
                  "; HttpOnly; Path=/; Max-Age=" (number->string timeout-seconds)))
+
+(define (assq-ref alist key)
+  (let ([pair (assq key alist)])
+    (if pair (cdr pair) #f)))
+
+(define (env-session-set! env key value)
+  (let ([store (assq-ref env 'session-store)]
+        [sid (assq-ref env 'session-id)]
+        [modified (assq-ref env 'session-modified)])
+    (when (and store sid modified)
+      (session-set! store sid
+        (cons (cons key value)
+              (let ([current (session-get store sid)])
+                (if (list? current) current '()))))
+      (set-box! modified #t))))
 
 )

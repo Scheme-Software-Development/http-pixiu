@@ -112,6 +112,7 @@
                                  (begin (release-64k-buffer buff) (void)))))))))
                  (put-bytevector binary-output-port body-bytevector)))
            (begin
+             (put-bytevector binary-output-port (string->bytevector "Content-Length: 0\r\n" (current-transcoder)))
              (put-bytevector binary-output-port 
                (string->bytevector 
                  (if keep-alive? "Connection: keep-alive\r\n" "Connection: close\r\n") 

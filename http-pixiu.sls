@@ -482,17 +482,32 @@ Connection: close
                                 (begin
                                   (close-input-port actual-fip)
                                   (make-response status:range-not-satisfiable '() '()))))
-                          (if (compressible? content-type size (assoc-ref headers "accept-encoding:"))
-                              (guard (ex [#t (begin (close-input-port actual-fip) (raise ex))])
-                                (let ([bv (make-bytevector size)])
-                                  (get-bytevector-n! actual-fip bv 0 size)
+                          (let ((precompressed
+                                  (guard (ex [#t #f])
+                                    (let ((gz-path (string-append local ".gz")))
+                                      (and (file-exists? gz-path)
+                                           (>= (time-second (guard (ex [#t 0]) (file-modification-time gz-path)))
+                                               (time-second mtime-time))
+                                           (open-file-input-port gz-path))))))
+                            (if (and precompressed (assoc-ref headers "accept-encoding:"))
+                                (let ([gz-size (file-length precompressed)])
                                   (close-input-port actual-fip)
-                                  (let ([compressed (gzip-compress bv)])
-                                    (make-response status:ok
-                                      `(,@base-headers
-                                        ("Content-Type" . ,content-type)
-                                        ("Content-Encoding" . "gzip"))
-                                      compressed))))
+                                  (make-response status:ok
+                                    `(,@base-headers
+                                      ("Content-Type" . ,content-type)
+                                      ("Content-Encoding" . "gzip"))
+                                    (cons precompressed gz-size)))
+                                (if (compressible? content-type size (assoc-ref headers "accept-encoding:"))
+                                    (guard (ex [#t (begin (close-input-port actual-fip) (raise ex))])
+                                      (let ([bv (make-bytevector size)])
+                                        (get-bytevector-n! actual-fip bv 0 size)
+                                        (close-input-port actual-fip)
+                                        (let ([compressed (gzip-compress bv)])
+                                          (make-response status:ok
+                                            `(,@base-headers
+                                              ("Content-Type" . ,content-type)
+                                              ("Content-Encoding" . "gzip"))
+                                            compressed))))
                               (let ([cached (cache-lookup file-cache-inst actual-path headers)])
                                 (if cached
                                     (begin
@@ -515,19 +530,22 @@ Connection: close
                                         (make-response status:ok
                                           `(,@base-headers
                                             ("Content-Type" . ,content-type))
-                                          (cons actual-fip size))))))))))))))))))))
+                                          (cons actual-fip size))))))))))))))))))))))
 
 (define (init-lifecycle socket handler log-port static-path config conn-counter)
   (let ([default-handler (serve-static-file static-path)]
         [rate-limiter (if config (make-rate-limiter (config-get config 'rate-limit-window) (config-get config 'rate-limit-max)) #f)])
     (lambda ()
-      (call-with-socket socket
-        (lambda (socket)
-          (let ([binary-input-port (socket-input-port socket)]
-                [binary-output-port (socket-output-port socket)])
-            (let loop ([request-count 0])
-              (let ([config (or *current-config* config)])
-                (socket-set-timeout! socket (or (and config (config-get config 'idle-timeout-ms)) 5000))
+      (let ([binary-input-port (socket-input-port socket)]
+            [binary-output-port (socket-output-port socket)])
+        (let loop ([request-count 0])
+              (if (eof-object? (lookahead-u8 binary-input-port))
+                  (begin
+                    (close-input-port binary-input-port)
+                    (close-output-port binary-output-port)
+                    (socket-close socket))
+                  (let ([config (or *current-config* config)])
+                    (socket-set-timeout! socket (or (and config (config-get config 'idle-timeout-ms)) 5000))
                 (guard (c
                        [(number? c)
                         (guard (ex [#t (void)]) (write-response binary-output-port c '() '() #t #f))
@@ -540,7 +558,13 @@ Connection: close
                 (let ([closure (parse-request-coroutine binary-input-port)])
                   (let*-values ([(closure0 method) (get-values-from-coroutine closure 'method)]
                                 [(closure1 target-string) (get-values-from-coroutine closure0 'uri)])
-                    (socket-set-timeout! socket 30000)
+                    (if (not method)
+                        (begin
+                          (close-input-port binary-input-port)
+                          (close-output-port binary-output-port)
+                          (socket-close socket))
+                        (begin
+                          (socket-set-timeout! socket 30000)
                     (let* ([env (build-request-env closure1 method target-string)]
                            [env (if (eq? (env-body env) 'stream)
                                     (let ([content-length (assq-ref env 'content-length)])
@@ -619,7 +643,13 @@ Connection: close
                               (if (not config)
                                   (log-request log-port method path (or status status:not-found) (body-size body) protocol (assq-ref env 'client-ip) (assoc-ref headers "user-agent:")))
                               (flush-output-port binary-output-port)
-                              (if (not close?) (loop (+ request-count 1)))))))))))))))))))
+                              (sleep (make-time 'time-duration 0 0))
+                              (if (not close?)
+                                  (loop (+ request-count 1))
+                                  (begin
+                                    (close-input-port binary-input-port)
+                                    (close-output-port binary-output-port)
+                                    (socket-close socket)))))))))))))))))))))
 
 
-)
+

@@ -46,9 +46,8 @@
 
 (define (stop-server-process)
   (guard (ex [#t (void)])
-    (let ([pid (call-with-input-file pid-file get-string-all)])
-      (system (string-append "kill " pid " 2>/dev/null"))
-      (delete-file pid-file))))
+    (system "pkill -9 -f \"http-pixiu-test-server\" 2>/dev/null >/dev/null 2>&1")
+    (guard (ex [#t (void)]) (delete-file pid-file))))
 
 (test-begin "integration: static file serving")
 (setup-files)

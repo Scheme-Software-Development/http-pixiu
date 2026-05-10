@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 source .akku/bin/activate
 
+# Clean up compiled objects so tests use latest library sources
+rm -f .akku/libobj/*.so
+
 # Clean up leftover test server processes
 ps aux | grep "http-pixiu-test" | grep -v grep | awk '{print $2}' | xargs -r kill -9 2>/dev/null
 ps aux | grep "scheme --script /tmp/http-pixiu" | grep -v grep | awk '{print $2}' | xargs -r kill -9 2>/dev/null

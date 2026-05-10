@@ -20,7 +20,7 @@
          (guard (ex [#t #f])
            (foreign-procedure "sendfile64"
                               (int int (* long) size_t)
-                             ssize_t))))
+                             long))))
 
   (define (sendfile-available?)
     (procedure? sendfile-proc))
@@ -30,11 +30,11 @@
       (let loop ([remaining count] [total 0])
         (if (<= remaining 0)
             total
-            (let ([n ((foreign-procedure "read" (int void* size_t) ssize_t)
+            (let ([n ((foreign-procedure "read" (int void* size_t) long)
                       in-fd buffer (min remaining 65536))])
               (if (<= n 0)
                   total
-                  (let ([w ((foreign-procedure "write" (int void* size_t) ssize_t)
+                  (let ([w ((foreign-procedure "write" (int void* size_t) long)
                             out-fd buffer n)])
                     (if (<= w 0)
                         total

@@ -83,14 +83,17 @@
                [cookies (if cookie-header
                             (parse-cookie-header cookie-header)
                             '())]
-               [session-id (or (assoc-ref cookies "session-id") #f)]
-               [session-data (if session-id
-                                 (session-get store session-id)
-                                 '())]
-               [env-with-session (cons (cons 'session session-data) env)])
+               [session-id (or (assoc-ref cookies "session-id") (generate-session-id))]
+               [session-data (session-get store session-id)]
+               [modified (box #f)]
+               [env-with-session `(,@env (session . ,session-data) (session-id . ,session-id) (session-store . ,store) (session-modified . ,modified))])
           (let ([resp (handler env-with-session)])
-            ;; TODO: if session was modified, set new cookie
-            resp)))))
+            (if (unbox modified)
+                (make-response (response-status resp)
+                  (cons (cons "Set-Cookie" (make-session-cookie-header session-id (session-store-timeout-seconds store)))
+                        (response-headers resp))
+                  (response-body resp))
+                resp))))))
 
   ;; ------------------------------------------------------------------
   ;; Logging middleware

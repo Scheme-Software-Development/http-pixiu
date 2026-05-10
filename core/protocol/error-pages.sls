@@ -7,6 +7,20 @@
 
 (define *error-page-cache* (make-hashtable string-hash string=?))
 (define *error-page-cache-mutex* (make-mutex))
+(define *error-page-cache-keys* '())
+(define *error-page-max-entries* 64)
+
+(define (error-page-cache-evict!)
+  (when (>= (hashtable-size *error-page-cache*) *error-page-max-entries*)
+    (let loop ([keys *error-page-cache-keys*] [count (div *error-page-max-entries* 2)])
+      (when (and (not (null? keys)) (> count 0))
+        (hashtable-delete! *error-page-cache* (car keys))
+        (loop (cdr keys) (- count 1))))
+    (set! *error-page-cache-keys*
+      (let trim ([keys *error-page-cache-keys*] [count (div *error-page-max-entries* 2)])
+        (if (or (null? keys) (<= count 0))
+            keys
+            (trim (cdr keys) (- count 1)))))))
 
 (define (status->reason-phrase code)
   (case code
@@ -59,7 +73,13 @@
         (if (bytevector? cached)
             cached
             (let ([content (load-error-page-raw static-path status-code)])
+              (error-page-cache-evict!)
               (hashtable-set! *error-page-cache* key content)
+              (set! *error-page-cache-keys*
+                (let loop ([keys *error-page-cache-keys*])
+                  (cond [(null? keys) (list key)]
+                        [(string=? (car keys) key) (cdr keys)]
+                        [else (cons (car keys) (loop (cdr keys)))])))
               content))))))
 
 (define (error-page-response out status-code static-path keep-alive?)
