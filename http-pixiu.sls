@@ -34,7 +34,6 @@
 
     (chibi uri)
     (ufo-socket)
-    (ufo-socket socket c)
     (ufo-thread-pool))
 
 (define (log-date->string date)
@@ -205,19 +204,6 @@
 (define default-ticks 100000)
 
 (define shutdown-flag #f)
-
-(define (socket-set-timeout! sock ms)
-  (guard (ex [#t (void)])
-    (let ([seconds (div ms 1000)]
-          [microseconds (* (mod ms 1000) 1000)])
-      (let ([f (foreign-procedure "setsockopt" (int int int void* int) int)]
-            [sz (* 2 (foreign-sizeof 'long))])
-        (let ([tv (foreign-alloc sz)])
-          (foreign-set! 'long tv 0 seconds)
-          (foreign-set! 'long tv (foreign-sizeof 'long) microseconds)
-          (f (socket-file-descriptor sock) 1 20 tv sz)   ; SO_RCVTIMEO
-          (f (socket-file-descriptor sock) 1 21 tv sz)   ; SO_SNDTIMEO
-          (foreign-free tv))))))
 
 (define waitpid
   (foreign-procedure "waitpid" (int void* int) int))
@@ -546,7 +532,8 @@ Connection: close
                     (close-output-port binary-output-port)
                     (socket-close socket))
                   (let ([config (or *current-config* config)])
-                    (socket-set-timeout! socket (or (and config (config-get config 'idle-timeout-ms)) 5000))
+                    (let ([idle-sec (div (or (and config (config-get config 'idle-timeout-ms)) 5000) 1000)])
+                      (socket-set-timeout! socket idle-sec idle-sec))
                 (guard (c
                        [(number? c)
                         (guard (ex [#t (void)]) (write-response binary-output-port c '() '() #t #f))
@@ -565,7 +552,7 @@ Connection: close
                           (close-output-port binary-output-port)
                           (socket-close socket))
                         (begin
-                          (socket-set-timeout! socket 30000)
+                          (socket-set-timeout! socket 30 30)
                     (let* ([env (build-request-env closure1 method target-string)]
                            [env (if (eq? (env-body env) 'stream)
                                     (let ([content-length (assq-ref env 'content-length)])
