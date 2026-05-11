@@ -33,7 +33,7 @@
   (let ([now (time-second (current-time))])
     (if (= now *cached-date-second*)
         *cached-date-bv*
-        (let ([bv (string->utf8 (date->string (current-date)))])
+        (let ([bv (string->utf8 (date->string (current-date 0)))])
           (set! *cached-date-second* now)
           (set! *cached-date-bv* bv)
           bv))))

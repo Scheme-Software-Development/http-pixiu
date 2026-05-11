@@ -6,6 +6,7 @@
     cache-generate-etag
     cache-content
     cache-etag
+    cache-mtime
     cache-match?)
 
   (import (chezscheme))
@@ -38,6 +39,7 @@
 
   (define (cache-content entry) (car entry))
   (define (cache-etag entry) (cadr entry))
+(define (cache-mtime entry) (caddr entry))
 
   (define (cache-lookup cache path headers)
     (let ([table (file-cache-table cache)])

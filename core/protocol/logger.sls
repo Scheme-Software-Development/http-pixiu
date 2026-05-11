@@ -98,7 +98,7 @@
         " +0800")))
 
   (define (current-timestamp)
-    (date->string (current-date)))
+    (date->string (current-date 0)))
 
   (define (logger-shutdown! logger)
     (with-mutex (logger-mutex logger)
