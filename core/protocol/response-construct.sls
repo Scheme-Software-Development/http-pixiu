@@ -13,6 +13,31 @@
     (http-pixiu core ffi sendfile)
     (http-pixiu core buffer-pool))
 
+;; Pre-computed constant bytevectors to avoid repeated allocation
+(define *bv-http11*          (string->utf8 "HTTP/1.1 "))
+(define *bv-sp*              (string->utf8 " "))
+(define *bv-crlf*            (string->utf8 "\r\n"))
+(define *bv-server*          (string->utf8 "Server: http-pixiu\r\n"))
+(define *bv-date-label*      (string->utf8 "Date: "))
+(define *bv-conn-keep*       (string->utf8 "Connection: keep-alive\r\n"))
+(define *bv-conn-close*      (string->utf8 "Connection: close\r\n"))
+(define *bv-content-length-zero* (string->utf8 "Content-Length: 0\r\n"))
+(define *bv-transfer-encoding-chunked* (string->utf8 "Transfer-Encoding: chunked\r\n"))
+(define *bv-chunk-end*       (string->utf8 "0\r\n\r\n"))
+
+;; Date header is cached at second granularity — HTTP only needs 1s precision.
+(define *cached-date-second* 0)
+(define *cached-date-bv* #f)
+
+(define (get-cached-date-bv)
+  (let ([now (time-second (current-time))])
+    (if (= now *cached-date-second*)
+        *cached-date-bv*
+        (let ([bv (string->utf8 (date->string (current-date)))])
+          (set! *cached-date-second* now)
+          (set! *cached-date-bv* bv)
+          bv))))
+
 (define (status->reason-phrase status-id)
   (case status-id
     [(100) "Continue"]
@@ -67,36 +92,34 @@
     [(binary-output-port status-id alist body send-body? keep-alive?)
      (let ([is-stream (and (pair? body) (input-port? (car body)) (number? (cdr body)))]
            [body-bytevector (if (string? body) (string->utf8 body) body)])
-       (put-bytevector binary-output-port (string->bytevector "HTTP/1.1 " (current-transcoder)))
-       (put-bytevector binary-output-port (string->bytevector (number->string status-id) (current-transcoder)))
-       (put-bytevector binary-output-port (string->bytevector " " (current-transcoder)))
-       (put-bytevector binary-output-port (string->bytevector (status->reason-phrase status-id) (current-transcoder)))
-       (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder)))
-       (put-bytevector binary-output-port (string->bytevector "Server: http-pixiu\r\n" (current-transcoder)))
-       (put-bytevector binary-output-port (string->bytevector "Date: " (current-transcoder)))
-       (put-bytevector binary-output-port (string->bytevector (date->string (current-date)) (current-transcoder)))
-       (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder)))
-       (put-bytevector binary-output-port 
-         (string->bytevector
-           (fold-left 
-             string-append
-             ""
-             (map (lambda (p) (string-append (car p) ": " (cdr p) "\r\n")) alist))
-           (current-transcoder)))
+       (put-bytevector binary-output-port *bv-http11*)
+       (put-bytevector binary-output-port (string->utf8 (number->string status-id)))
+       (put-bytevector binary-output-port *bv-sp*)
+       (put-bytevector binary-output-port (string->utf8 (status->reason-phrase status-id)))
+       (put-bytevector binary-output-port *bv-crlf*)
+       (put-bytevector binary-output-port *bv-server*)
+       (put-bytevector binary-output-port *bv-date-label*)
+       (put-bytevector binary-output-port (get-cached-date-bv))
+       (put-bytevector binary-output-port *bv-crlf*)
+       (for-each
+         (lambda (p)
+           (put-bytevector binary-output-port (string->utf8 (car p)))
+           (put-bytevector binary-output-port (string->utf8 ": "))
+           (put-bytevector binary-output-port (string->utf8 (cdr p)))
+           (put-bytevector binary-output-port *bv-crlf*))
+         alist)
        (let ([body-size (cond
                           [is-stream (cdr body)]
                           [(bytevector? body-bytevector) (bytevector-length body-bytevector)]
                           [else #f])])
          (if body-size
            (begin 
-             (put-bytevector binary-output-port (string->bytevector "Content-Length: " (current-transcoder)))
-             (put-bytevector binary-output-port (string->bytevector (number->string body-size) (current-transcoder)))
-             (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder)))
-             (put-bytevector binary-output-port 
-               (string->bytevector 
-                 (if keep-alive? "Connection: keep-alive\r\n" "Connection: close\r\n") 
-                 (current-transcoder)))
-             (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder)))
+             (put-bytevector binary-output-port (string->utf8 "Content-Length: "))
+             (put-bytevector binary-output-port (string->utf8 (number->string body-size)))
+             (put-bytevector binary-output-port *bv-crlf*)
+             (put-bytevector binary-output-port
+               (if keep-alive? *bv-conn-keep* *bv-conn-close*))
+             (put-bytevector binary-output-port *bv-crlf*)
              (if send-body?
                (if is-stream
                  (let ([port (car body)] [size (cdr body)])
@@ -112,12 +135,10 @@
                                  (begin (release-64k-buffer buff) (void)))))))))
                  (put-bytevector binary-output-port body-bytevector)))
            (begin
-             (put-bytevector binary-output-port (string->bytevector "Content-Length: 0\r\n" (current-transcoder)))
-             (put-bytevector binary-output-port 
-               (string->bytevector 
-                 (if keep-alive? "Connection: keep-alive\r\n" "Connection: close\r\n") 
-                 (current-transcoder)))
-             (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder))))))))]))
+             (put-bytevector binary-output-port *bv-content-length-zero*)
+             (put-bytevector binary-output-port
+               (if keep-alive? *bv-conn-keep* *bv-conn-close*))
+             (put-bytevector binary-output-port *bv-crlf*))))))]))
 
 (define write-json-response
   (case-lambda
@@ -144,28 +165,26 @@
     ((binary-output-port status-id alist body send-body?)
      (write-chunked-response binary-output-port status-id alist body send-body? #f))
     ((binary-output-port status-id alist body send-body? keep-alive?)
-     (put-bytevector binary-output-port (string->bytevector "HTTP/1.1 " (current-transcoder)))
-     (put-bytevector binary-output-port (string->bytevector (number->string status-id) (current-transcoder)))
-     (put-bytevector binary-output-port (string->bytevector " " (current-transcoder)))
-     (put-bytevector binary-output-port (string->bytevector (status->reason-phrase status-id) (current-transcoder)))
-     (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder)))
-     (put-bytevector binary-output-port (string->bytevector "Server: http-pixiu\r\n" (current-transcoder)))
-     (put-bytevector binary-output-port (string->bytevector "Date: " (current-transcoder)))
-     (put-bytevector binary-output-port (string->bytevector (date->string (current-date)) (current-transcoder)))
-     (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder)))
+     (put-bytevector binary-output-port *bv-http11*)
+     (put-bytevector binary-output-port (string->utf8 (number->string status-id)))
+     (put-bytevector binary-output-port *bv-sp*)
+     (put-bytevector binary-output-port (string->utf8 (status->reason-phrase status-id)))
+     (put-bytevector binary-output-port *bv-crlf*)
+     (put-bytevector binary-output-port *bv-server*)
+     (put-bytevector binary-output-port *bv-date-label*)
+     (put-bytevector binary-output-port (get-cached-date-bv))
+     (put-bytevector binary-output-port *bv-crlf*)
      (for-each
        (lambda (p)
-         (put-bytevector binary-output-port (string->bytevector (car p) (current-transcoder)))
-         (put-bytevector binary-output-port (string->bytevector ": " (current-transcoder)))
-         (put-bytevector binary-output-port (string->bytevector (cdr p) (current-transcoder)))
-         (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder))))
+         (put-bytevector binary-output-port (string->utf8 (car p)))
+         (put-bytevector binary-output-port (string->utf8 ": "))
+         (put-bytevector binary-output-port (string->utf8 (cdr p)))
+         (put-bytevector binary-output-port *bv-crlf*))
        alist)
      (put-bytevector binary-output-port
-       (string->bytevector
-         (if keep-alive? "Connection: keep-alive\r\n" "Connection: close\r\n")
-         (current-transcoder)))
-     (put-bytevector binary-output-port (string->bytevector "Transfer-Encoding: chunked\r\n" (current-transcoder)))
-     (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder)))
+       (if keep-alive? *bv-conn-keep* *bv-conn-close*))
+     (put-bytevector binary-output-port *bv-transfer-encoding-chunked*)
+     (put-bytevector binary-output-port *bv-crlf*)
      (when send-body?
        (if (and (pair? body) (input-port? (car body)))
            (let ((port (car body)) (buff (acquire-64k-buffer)))
@@ -173,16 +192,16 @@
                (let ((n (get-bytevector-n! port buff 0 65536)))
                  (if (and n (not (eof-object? n)) (> n 0))
                      (begin
-                       (put-bytevector binary-output-port (string->bytevector (string-append (number->string n 16) "\r\n") (current-transcoder)))
+                       (put-bytevector binary-output-port (string->utf8 (string-append (number->string n 16) "\r\n")))
                        (put-bytevector binary-output-port buff 0 n)
-                       (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder)))
+                       (put-bytevector binary-output-port *bv-crlf*)
                        (loop))
                      (begin (release-64k-buffer buff) (void))))))
            (let ((bv (if (string? body) (string->utf8 body) body)))
-             (put-bytevector binary-output-port (string->bytevector (string-append (number->string (bytevector-length bv) 16) "\r\n") (current-transcoder)))
+             (put-bytevector binary-output-port (string->utf8 (string-append (number->string (bytevector-length bv) 16) "\r\n")))
              (put-bytevector binary-output-port bv 0 (bytevector-length bv))
-             (put-bytevector binary-output-port (string->bytevector "\r\n" (current-transcoder))))))
-     (put-bytevector binary-output-port (string->bytevector "0\r\n\r\n" (current-transcoder))))))
+             (put-bytevector binary-output-port *bv-crlf*))))
+     (put-bytevector binary-output-port *bv-chunk-end*))))
 
 (define write-html-response
   (case-lambda
