@@ -8,7 +8,37 @@
           write-html-response
           safe-path?
           connection-close?
-          assoc-ref)
+          assoc-ref
+          make-router
+          router-get
+          router-post
+          router-put
+          router-delete
+          router-options
+          router-head
+          router-dispatch
+          router->handler
+          make-response
+          response?
+          response-status
+          response-headers
+          response-body
+          env-method
+          env-path
+          env-headers
+          env-body
+          env-query
+          env-protocol
+          env-client-ip
+          env-body-string
+          env-body-form
+          env-body-port
+          env-get
+          parse-multipart-form-data
+          multipart-part-name
+          multipart-part-filename
+          multipart-part-content-type
+          multipart-part-body)
   (import 
     (chezscheme)
 
@@ -21,6 +51,7 @@
     (http-pixiu core protocol status)
     (http-pixiu core protocol logger)
     (http-pixiu core protocol ratelimit)
+    (http-pixiu core protocol multipart)
     (http-pixiu core config)
     (http-pixiu core util io)
     (http-pixiu core util binary-read)
@@ -31,6 +62,7 @@
     (http-pixiu core zlib)
     (http-pixiu core connection-counter)
     (http-pixiu core metrics)
+    (http-pixiu core router)
 
     (chibi uri)
     (ufo-socket)
@@ -137,8 +169,14 @@
        (or (not conn) (not (equal? (string-downcase (string-trim-both conn)) "keep-alive")))])))
 
 (define (safe-path? static-path uri-path)
-  (let ([decoded (uri-decode uri-path)])
-    (and (not (string-contains? decoded "\x00;"))
+  (let ([decoded (guard (ex [#t #f]) (uri-decode uri-path))])
+    (and decoded
+         (not (string-contains? decoded "\x00;"))
+         (not (let loop ([i 0])
+                (and (< i (string-length decoded))
+                     (or (char=? (string-ref decoded i) #\nul)
+                         (loop (+ i 1))))))
+         ;; Original check: reject any bare .. sequence in raw path
          (let ([full (string-append static-path decoded)])
            (let loop ([i 0])
              (cond
@@ -152,7 +190,36 @@
                      (or (>= (+ i 2) (string-length full))
                          (char=? (string-ref full (+ i 2)) #\/)))
                 #f]
-               [else (loop (+ i 1))]))))))
+               [else (loop (+ i 1))])))
+         ;; Additional defense: normalize path and verify it stays under static-path
+         (let ([parts (let split ([i 0] [start 0] [acc '()])
+                        (cond
+                          [(>= i (string-length decoded))
+                           (reverse (if (>= start i) acc (cons (substring decoded start i) acc)))]
+                          [(char=? (string-ref decoded i) #\/)
+                           (split (+ i 1) (+ i 1) (cons (substring decoded start i) acc))]
+                          [else (split (+ i 1) start acc)]))])
+           (let ([norm-parts (let normalize ([ps parts] [stack '()])
+                               (cond
+                                 [(null? ps) (reverse stack)]
+                                 [(or (string=? (car ps) "") (string=? (car ps) "."))
+                                  (normalize (cdr ps) stack)]
+                                 [(string=? (car ps) "..")
+                                  (if (null? stack)
+                                      #f
+                                      (normalize (cdr ps) (cdr stack)))]
+                                 [else (normalize (cdr ps) (cons (car ps) stack))]))])
+             (and norm-parts
+                  (let ([full (apply string-append
+                                     (cons static-path
+                                           (map (lambda (p) (string-append "/" p)) norm-parts)))])
+                    (and (>= (string-length full) (string-length static-path))
+                         (string=? (substring full 0 (string-length static-path)) static-path)
+                         ;; No null bytes in resolved path
+                         (not (let loop ([i 0])
+                                (and (< i (string-length full))
+                                     (or (char=? (string-ref full i) #\nul)
+                                         (loop (+ i 1))))))))))))))
 
 (define (consume-coroutine closure)
   (let-values ([(resume val) (closure)])
@@ -208,25 +275,32 @@
 (define waitpid
   (foreign-procedure "waitpid" (int void* int) int))
 
+(define (socket-peer-address-string sock)
+  (guard (ex [#t #f])
+    (let-values ([(host service) (socket-peerinfo sock)])
+      host)))
+
 (define (gzip-compress bv)
-  (let-values ([(to-stdin from-stdout from-stderr pid) (open-process-ports "gzip -c")])
-    (put-bytevector to-stdin bv)
-    (flush-output-port to-stdin)
-    (close-output-port to-stdin)
-    (let-values ([(out get) (open-bytevector-output-port)])
-      (let loop ()
-        (let ([chunk (get-bytevector-n from-stdout 65536)])
-          (if (eof-object? chunk)
-              (begin
-                (close-input-port from-stdout)
-                (close-input-port from-stderr)
-                (let ([status-ptr (foreign-alloc (foreign-sizeof 'int))])
-                  (waitpid pid status-ptr 0)
-                  (foreign-free status-ptr))
-                (get))
-              (begin
-                (put-bytevector out chunk)
-                (loop))))))))
+  (if (zlib-gzip-available?)
+      (zlib-gzip-compress bv 6)
+      (let-values ([(to-stdin from-stdout from-stderr pid) (open-process-ports "gzip -c")])
+        (put-bytevector to-stdin bv)
+        (flush-output-port to-stdin)
+        (close-output-port to-stdin)
+        (let-values ([(out get) (open-bytevector-output-port)])
+          (let loop ()
+            (let ([chunk (get-bytevector-n from-stdout 65536)])
+              (if (eof-object? chunk)
+                  (begin
+                    (close-input-port from-stdout)
+                    (close-input-port from-stderr)
+                    (let ([status-ptr (foreign-alloc (foreign-sizeof 'int))])
+                      (waitpid pid status-ptr 0)
+                      (foreign-free status-ptr))
+                    (get))
+                  (begin
+                    (put-bytevector out chunk)
+                    (loop)))))))))
 
 (define (compressible? content-type size accept-encoding)
   (and accept-encoding
@@ -316,7 +390,7 @@
                               (loop)
                               (begin
                                 (connection-counter-release! conn-counter)
-                                (guard (ex [#t (void)])
+                                (guard (ex [ex (log-error log-port (string-append "503 response write failed: " (format "~a" ex)))])
                                   (let ([out (socket-output-port received-socket)])
                                     (put-bytevector out (string->utf8 "HTTP/1.1 503 Service Unavailable
 Content-Length: 0
@@ -324,10 +398,10 @@ Connection: close
 
 "))
                                     (flush-output-port out)))
-                                (guard (ex [#t (void)]) (socket-close received-socket))
+                                (guard (ex [ex (log-error log-port (string-append "socket-close error: " (format "~a" ex)))]) (socket-close received-socket))
                                 (loop))))
                         (begin
-                          (guard (ex [#t (void)]) (socket-close received-socket))
+                          (guard (ex [ex (log-error log-port (string-append "socket-close error: " (format "~a" ex)))]) (socket-close received-socket))
                           (loop)))
                     (begin
                       (if shutdown-flag
@@ -520,8 +594,19 @@ Connection: close
                                           (cons actual-fip size))))))))))))))))))))))
 
 (define (init-lifecycle socket handler log-port static-path config conn-counter)
-  (let ([default-handler (serve-static-file static-path)]
-        [rate-limiter (if config (make-rate-limiter (config-get config 'rate-limit-window) (config-get config 'rate-limit-max)) #f)])
+  (let* ([default-handler (serve-static-file static-path)]
+         [rate-limiter (if config (make-rate-limiter (config-get config 'rate-limit-window) (config-get config 'rate-limit-max)) #f)]
+         [final-handler
+         (if config
+             (let ([h (or handler default-handler)])
+               (let ([h2 ((cors-middleware (config-get config 'cors-allow-origin)) h)])
+                 (let ([h3 (if rate-limiter
+                               ((ratelimit-middleware rate-limiter) h2)
+                               h2)])
+                   (let ([h4 ((logging-middleware log-port) h3)])
+                     (let ([h5 (security-headers-middleware h4)])
+                       ((error-page-middleware static-path) h5))))))
+             (security-headers-middleware (or handler default-handler)))])
     (lambda ()
       (let ([binary-input-port (socket-input-port socket)]
             [binary-output-port (socket-output-port socket)])
@@ -536,13 +621,18 @@ Connection: close
                       (socket-set-timeout! socket idle-sec idle-sec))
                 (guard (c
                        [(number? c)
-                        (guard (ex [#t (void)]) (write-response binary-output-port c '() '() #t #f))
+                        (guard (ex [ex (log-error log-port (string-append "write-response error: " (format "~a" ex)))])
+                          (write-response binary-output-port c '() '() #t #f))
                         (log-request log-port "UNKNOWN" "/" c 0 "HTTP/1.1")
-                        (guard (ex [#t (void)]) (flush-output-port binary-output-port))]
+                        (guard (ex [ex (log-error log-port (string-append "flush-output-port error: " (format "~a" ex)))])
+                          (flush-output-port binary-output-port))]
                        [else
-                        (guard (ex [#t (void)]) (write-response binary-output-port status:internal-server-error '() '() #t #f))
+                        (guard (ex [ex (log-error log-port (string-append "write error-response failed: " (format "~a" ex)))])
+                          (write-response binary-output-port status:internal-server-error '() '() #t #f))
                         (log-request log-port "UNKNOWN" "/" status:internal-server-error 0 "HTTP/1.1")
-                        (guard (ex [#t (void)]) (flush-output-port binary-output-port))])
+                        (log-error log-port (string-append "request handler exception: " (format "~a" c)))
+                        (guard (ex [ex (log-error log-port (string-append "flush-output-port error: " (format "~a" ex)))])
+                          (flush-output-port binary-output-port))])
                 (let ([closure (parse-request-coroutine binary-input-port)])
                   (let*-values ([(closure0 method) (get-values-from-coroutine closure 'method)]
                                 [(closure1 target-string) (get-values-from-coroutine closure0 'uri)])
@@ -554,6 +644,7 @@ Connection: close
                         (begin
                           (socket-set-timeout! socket 30 30)
                     (let* ([env (build-request-env closure1 method target-string)]
+                           [env (cons `(client-ip . ,(or (socket-peer-address-string socket) "unknown")) env)]
                            [env (if (eq? (env-body env) 'stream)
                                     (let ([content-length (assq-ref env 'content-length)])
                                       (let ([remaining-box (box content-length)]
@@ -580,29 +671,14 @@ Connection: close
                            [headers (assq-ref env 'headers)]
                            [protocol (assq-ref env 'protocol)]
                            [close? (or (>= request-count 100)
-                                       (connection-close? headers protocol)
-                                       (and (eq? (env-body env) 'stream)
-                                            (let ([count-box (assq-ref env 'body-count)])
-                                              (let ([content-length (assq-ref env 'content-length)])
-                                                (< (unbox count-box) content-length)))))])
+                                       (connection-close? headers protocol))])
                       ;; Enforce max Content-Length
                       (let ([content-length-str (assoc-ref headers "content-length:")])
                         (when content-length-str
                           (let ([len (guard (ex [#t #f]) (string->number content-length-str))])
                             (when (and len (> len max-content-length))
                               (raise status:payload-too-large)))))
-                      (let ([final-handler
-                             (if config
-                                 (let ([h (or handler default-handler)])
-                                   (let ([h2 ((cors-middleware (config-get config 'cors-allow-origin)) h)])
-                                     (let ([h3 (if rate-limiter
-                                                   ((ratelimit-middleware rate-limiter) h2)
-                                                   h2)])
-                                       (let ([h4 ((logging-middleware log-port) h3)])
-                                         (let ([h5 (security-headers-middleware h4)])
-                                           ((error-page-middleware static-path) h5))))))
-                                 (security-headers-middleware (or handler default-handler)))])
-                        (let ([request-id (assq-ref env 'request-id)])
+                      (let ([request-id (assq-ref env 'request-id)])
                           (let ([start-time (current-time)]
                                 [resp (final-handler env)])
                             (let ([status (response-status resp)]
@@ -631,13 +707,26 @@ Connection: close
                               (if (not config)
                                   (log-request log-port method path (or status status:not-found) (body-size body) protocol (assq-ref env 'client-ip) (assoc-ref headers "user-agent:")))
                               (flush-output-port binary-output-port)
-                              (sleep (make-time 'time-duration 0 0))
-                              (if (not close?)
-                                  (loop (+ request-count 1))
-                                  (begin
-                                    (close-input-port binary-input-port)
-                                    (close-output-port binary-output-port)
-                                    (socket-close socket)))))))))))))))))))))
+                              ;; Drain unread request body for keep-alive safety
+                              (let ([body-drained?
+                                     (guard (ex [#t #f])
+                                       (if (eq? (env-body env) 'stream)
+                                           (let ([bp (assq-ref env 'body-port)])
+                                             (if bp
+                                                 (let ([discard (make-bytevector 65536)])
+                                                   (let drain ()
+                                                     (let ([n (get-bytevector-n! bp discard 0 65536)])
+                                                       (if (and (number? n) (> n 0))
+                                                           (drain)
+                                                           #t))))
+                                                 #t))
+                                           #t))])
+                                (if (and (not close?) body-drained?)
+                                    (loop (+ request-count 1))
+                                    (begin
+                                      (close-input-port binary-input-port)
+                                      (close-output-port binary-output-port)
+                                      (socket-close socket)))))))))))))))))))))
 
 
 

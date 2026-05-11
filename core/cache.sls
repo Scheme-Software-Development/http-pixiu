@@ -42,10 +42,16 @@
   (define (cache-lookup cache path headers)
     (let ([table (file-cache-table cache)])
       (let ([entry (hashtable-ref table path #f)])
-        (and entry
-             (begin
-               (set-car! (cddddr entry) (current-time))
-               entry)))))
+        (when entry
+          (set-car! (cddddr entry) (current-time))
+          ;; Move to end for true LRU
+          (file-cache-keys-set! cache
+            (let loop ([keys (file-cache-keys cache)])
+              (cond
+                [(null? keys) (list path)]
+                [(string=? (car keys) path) (append (cdr keys) (list path))]
+                [else (cons (car keys) (loop (cdr keys)))]))))
+        entry)))
 
   (define (cache-evict-oldest! cache)
     (let ([keys (file-cache-keys cache)])
