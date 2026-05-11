@@ -18,15 +18,22 @@ A lightweight continuation-based HTTP server written in Chez Scheme (R6RS).
 - **ETag / 304 Not Modified** — Static files emit ETags; conditional requests return `304` with no body.
 - **Base headers** — Static file responses include `Accept-Ranges: bytes`, `Last-Modified`, and `Cache-Control: public, max-age=...`.
 - **Trailing-slash redirect** — Directory URLs without a trailing `/` receive `301 Moved Permanently`.
-- **Rate limiting** — Per-server token-bucket rate limiter (default: 1000 req/min); returns `429 Too Many Requests` when exceeded.
-- **CORS preflight** — `OPTIONS` requests receive `204 No Content` with permissive CORS headers.
+- **Rate limiting** — Per-client token-bucket rate limiter with automatic background cleanup of stale entries; returns `429 Too Many Requests` when exceeded.
+- **CORS preflight** — `OPTIONS` requests receive `204 No Content` with configurable CORS headers.
+- **Security headers** — Responses include `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Strict-Transport-Security`, and `Content-Security-Policy` by default.
 - **Custom error pages** — Looks for `<static-path>/error-{code}.html`; falls back to minimal HTML if absent.
 - **Queue-full 503** — When the request queue is saturated, new connections receive `503 Service Unavailable` before being closed.
+- **Connection counter** — Tracks active connections with a configurable upper bound.
 - **Health check endpoint** — `GET /health` returns `{"status":"ok"}`.
 - **Request tracing** — Every response includes `X-Request-ID`.
-- **Gzip compression** — Text responses ≤1 MiB are automatically gzip-compressed when client accepts it.
+- **Gzip compression** — Text responses ≤1 MiB are automatically gzip-compressed when the client accepts `gzip`. Uses a native zlib FFI wrapper for performance.
 - **HTTP Range requests** — Supports `bytes=start-end` for `206 Partial Content`.
 - **Chunked Transfer Encoding** — Request parser handles `Transfer-Encoding: chunked`.
+- **WebSocket upgrade detection** — Detects RFC 6455 WebSocket handshake requests and computes the `Sec-WebSocket-Accept` key.
+- **Multipart form-data parser** — `parse-multipart-form-data` for handling `multipart/form-data` uploads.
+- **Session management** — In-memory session store with timeout, cookie parsing, and session ID generation.
+- **Prometheus metrics** — Built-in metrics endpoint (`/metrics`) exposes `http_requests_total`, `http_connections_active`, and `http_request_duration_ms_bucket` histograms.
+- **Config validation** — `config.scm` is validated against a whitelist of known keys on load.
 
 ## Install
 
@@ -154,6 +161,48 @@ Returns `#t` if the connection should be closed after this request.
 
 Returns `#t` if `uri-path` does not escape `static-path` via `..`.
 
+### `parse-multipart-form-data`
+
+```scheme
+(parse-multipart-form-data binary-input-port content-type-header)
+```
+
+Parses a `multipart/form-data` body and returns an alist of fields:
+
+```scheme
+'(("name" . "value")
+  ("file" . #<hashtable>))
+```
+
+Each file entry contains `filename`, `content-type`, and `data` (bytevector) keys.
+
+### WebSocket helpers
+
+```scheme
+(websocket-request? headers)   ; => #t if the request is a valid WS upgrade
+(websocket-accept-key key)     ; => base64 accept string for Sec-WebSocket-Accept
+(make-websocket-response key)  ; => 101 Switching Protocols response alist
+```
+
+### Session store
+
+```scheme
+(define store (session-store-create 3600))  ; 1 hour timeout
+(session-set! store "sess-id" 'key "value")
+(session-get store "sess-id" 'key)         ; => "value"
+(session-destroy! store "sess-id")
+```
+
+### Buffer pool
+
+```scheme
+(define bv (acquire-64k-buffer))
+;; ... use bv ...
+(release-64k-buffer bv)
+```
+
+Thread-local 64 KiB bytevector pool to reduce GC pressure.
+
 ## Tests
 
 ```bash
@@ -166,6 +215,7 @@ Runs all `.sps` test files under `tests/`.
 
 | Version | Notes |
 |---------|-------|
+| 1.0.4 | Add features: metrics histograms, rate-limit cleanup, config validation, gzip FFI wrapper, WebSocket detection, multipart parser, session store, security headers, CORS middleware, connection counter |
 | 1.0.3 | Add feature: yield among requests (tickal task queue with Chez engines) |
 | 1.0.2 | Fix bug: `\r\n` compatibility |
 | 1.0.1 | Fix bug: get body with coroutine |
