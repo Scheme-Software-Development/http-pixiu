@@ -14,3 +14,9 @@ make
 
 mv socket/*.o ../../../socket/
 mv socket/*.so ../../../socket/
+
+# Build zlib gzip wrapper
+cd ../../../
+if [ -f "core/ffi/zlib-gzip.c" ]; then
+    gcc -shared -fPIC -o socket/zlib-gzip-wrapper.so core/ffi/zlib-gzip.c -lz 2>/dev/null || echo "zlib-gzip-wrapper build skipped (no gcc or zlib)"
+fi

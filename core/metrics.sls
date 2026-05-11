@@ -8,17 +8,22 @@
 
   (import (chezscheme))
 
+  (define *histogram-buckets*
+    '(5 10 25 50 100 250 500 1000 2500 5000 10000))
+
   (define-record-type metrics-collector
     (fields
       (mutable requests-total-table)
       (mutable active-connections)
       (mutable duration-sums)
+      (mutable duration-buckets)
       mutex))
 
   (define (metrics-new)
     (make-metrics-collector
       (make-hashtable equal-hash equal?)
       0
+      (make-hashtable equal-hash equal?)
       (make-hashtable equal-hash equal?)
       (make-mutex)))
 
@@ -31,7 +36,17 @@
         (let ([old (hashtable-ref (metrics-collector-duration-sums metrics) key '(0 . 0))])
           (hashtable-set! (metrics-collector-duration-sums metrics)
                           key
-                          (cons (+ 1 (car old)) (+ duration-ms (cdr old))))))))
+                          (cons (+ 1 (car old)) (+ duration-ms (cdr old)))))
+        ;; Update histogram buckets
+        (let ([buckets (metrics-collector-duration-buckets metrics)])
+          (for-each
+            (lambda (b)
+              (when (<= duration-ms b)
+                (let ([bkey (list method status b)])
+                  (hashtable-set! buckets bkey (+ 1 (hashtable-ref buckets bkey 0))))))
+            *histogram-buckets*)
+          (let ([inf-key (list method status "+Inf")])
+            (hashtable-set! buckets inf-key (+ 1 (hashtable-ref buckets inf-key 0))))))))
 
   (define (metrics-active-connections-inc! metrics)
     (with-mutex (metrics-collector-mutex metrics)
@@ -92,6 +107,25 @@
                 (put-string port (number->string (car pair)))
                 (put-string port "\n")))
             dur-keys))
+        (put-string port "\n")
+
+        ;; Duration histogram buckets
+        (put-string port "# HELP http_request_duration_ms_bucket Request duration histogram\n")
+        (put-string port "# TYPE http_request_duration_ms_bucket histogram\n")
+        (let ([bucket-keys (vector->list (hashtable-keys (metrics-collector-duration-buckets metrics)))])
+          (for-each
+            (lambda (key)
+              (let ([count (hashtable-ref (metrics-collector-duration-buckets metrics) key 0)])
+                (put-string port "http_request_duration_ms_bucket{method=\"")
+                (put-string port (car key))
+                (put-string port "\",status=\"")
+                (put-string port (number->string (cadr key)))
+                (put-string port "\",le=\"")
+                (put-string port (caddr key))
+                (put-string port "\"} ")
+                (put-string port (number->string count))
+                (put-string port "\n")))
+            bucket-keys))
 
         (string->utf8 (get-output-string port)))))
 )

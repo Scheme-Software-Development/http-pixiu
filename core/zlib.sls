@@ -1,7 +1,9 @@
 (library (http-pixiu core zlib)
   (export
     zlib-compress
-    zlib-available?)
+    zlib-gzip-compress
+    zlib-available?
+    zlib-gzip-available?)
 
   (import (chezscheme))
 
@@ -45,7 +47,7 @@
     (foreign-procedure "compressBound" (unsigned-long) unsigned-long))
 
   ;; ------------------------------------------------------------------
-  ;; Compress a bytevector using zlib.
+  ;; Compress a bytevector using zlib (RFC 1950).
   ;; level: -1=default, 0=none, 1=fast, 9=best
   ;; Returns a new bytevector with compressed data.
   ;; ------------------------------------------------------------------
@@ -67,5 +69,44 @@
             (begin
               (foreign-free dest-len-ptr)
               (error 'zlib-compress "compression failed" rc))))))
+
+  ;; ------------------------------------------------------------------
+  ;; Gzip compression via custom C wrapper.
+  ;; The wrapper calls deflateInit2 with windowBits=31 for gzip format.
+  ;; ------------------------------------------------------------------
+  (define (try-load-gzip-wrapper)
+    (guard (ex [#t #f])
+      (load-shared-object "./socket/zlib-gzip-wrapper.so")
+      #t))
+
+  (define *gzip-wrapper-loaded* (and *zlib-loaded* (try-load-gzip-wrapper)))
+
+  (define gzip-compress-proc
+    (and *gzip-wrapper-loaded*
+         (guard (ex [#t #f])
+           (foreign-procedure "http_pixiu_gzip_compress"
+             (u8* unsigned-long u8* void* int) int))))
+
+  (define (zlib-gzip-available?)
+    (procedure? gzip-compress-proc))
+
+  (define (zlib-gzip-compress bv level)
+    (if (not (procedure? gzip-compress-proc))
+        (error 'zlib-gzip-compress "gzip compression not available"))
+    (let* ([src-len (bytevector-length bv)]
+           [max-len (+ 18 (compressBound src-len))]
+           [dest (make-bytevector max-len)]
+           [dest-len-ptr (foreign-alloc (foreign-sizeof 'unsigned-long))])
+      (foreign-set! 'unsigned-long dest-len-ptr 0 max-len)
+      (let ([rc (gzip-compress-proc bv src-len dest dest-len-ptr level)])
+        (if (= rc 0)
+            (let ([actual-len (foreign-ref 'unsigned-long dest-len-ptr 0)])
+              (foreign-free dest-len-ptr)
+              (let ([result (make-bytevector actual-len)])
+                (bytevector-copy! dest 0 result 0 actual-len)
+                result))
+            (begin
+              (foreign-free dest-len-ptr)
+              (error 'zlib-gzip-compress "gzip compression failed" rc))))))
 
 )

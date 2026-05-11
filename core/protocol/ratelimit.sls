@@ -12,11 +12,19 @@
           mutex))
 
 (define (make-rate-limiter window-seconds max-requests)
-  (make-rate-limiter-raw (make-hashtable string-hash string=?)
-                         window-seconds
-                         max-requests
-                         10000
-                         (make-mutex)))
+  (let ([limiter (make-rate-limiter-raw (make-hashtable string-hash string=?)
+                                        window-seconds
+                                        max-requests
+                                        10000
+                                        (make-mutex))])
+    ;; Start background cleanup thread
+    (fork-thread
+      (lambda ()
+        (let loop ()
+          (sleep (make-time 'time-duration 0 60))  ; every 60 seconds
+          (rate-limiter-cleanup! limiter)
+          (loop))))
+    limiter))
 
 (define (current-epoch)
   (floor (time-second (current-time))))

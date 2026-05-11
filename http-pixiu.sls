@@ -23,6 +23,7 @@
     (http-pixiu core protocol ratelimit)
     (http-pixiu core config)
     (http-pixiu core util io)
+    (http-pixiu core util binary-read)
     (http-pixiu core util association)
     (http-pixiu core util date)
     (http-pixiu core mime)

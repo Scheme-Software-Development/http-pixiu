@@ -26,6 +26,24 @@
   (let ([pair (assoc key config)])
     (if pair (cdr pair) #f)))
 
+(define *valid-config-keys*
+  '(port thread-num expire-duration ticks static-path log-file log-format
+    max-queue-size rate-limit-window rate-limit-max cors-allow-origin
+    session-timeout idle-timeout-ms vhosts cache-control-max-age))
+
+(define (config-safe-read content)
+  (let ([data (read (open-string-input-port content))])
+    (if (not (list? data))
+        (error 'config-safe-read "Config must be an association list"))
+    (for-each
+      (lambda (pair)
+        (if (not (and (pair? pair) (symbol? (car pair))))
+            (error 'config-safe-read "Invalid config entry"))
+        (if (not (member (car pair) *valid-config-keys*))
+            (error 'config-safe-read (string-append "Unknown config key: " (symbol->string (car pair))))))
+      data)
+    data))
+
 (define (config-validate! config)
   (define (check key pred expected)
     (let ([v (config-get config key)])
@@ -51,5 +69,5 @@
     (let ([port (open-file-input-port path)])
       (let ([content (get-string-all port)])
         (close-input-port port)
-        (config-validate! (read (open-string-input-port content)))))))
+        (config-validate! (config-safe-read content))))))
 )

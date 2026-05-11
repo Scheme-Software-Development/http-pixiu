@@ -5,7 +5,11 @@
 
     server-socket
     server-log-port
-    server-thread-pool)
+    server-thread-pool
+    server-shutdown?
+    server-shutdown?-set!
+    server-in-flight-counter
+    server-in-flight-counter-set!)
   (import 
     (chezscheme)
     (ufo-socket))
@@ -14,14 +18,18 @@
   (fields 
     (immutable socket)
     (immutable log-port)
-    (immutable thread-pool))
+    (immutable thread-pool)
+    (mutable shutdown?)
+    (mutable in-flight-counter))
   (protocol
     (lambda (new)
       (lambda (port log-port thread-pool )
         (new 
           (make-server-socket port)
           log-port 
-          thread-pool)))))
+          thread-pool
+          #f
+          0)))))
 
 
 )
